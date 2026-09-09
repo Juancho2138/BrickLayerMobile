@@ -1,0 +1,19 @@
+{
+  "name": "BrickLayer Mobile",
+  "short_name": "BrickLayer",
+  "description": "Editor movil de capas 2D para modelos de bloques 1x1.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1117",
+  "theme_color": "#0f1117",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

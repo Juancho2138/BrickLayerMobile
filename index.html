@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0f1117">
+    <title>BrickLayer Mobile</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>BrickLayer Mobile</h1>
+          <p>Editor de capas</p>
+        </div>
+        <button class="icon-button" id="newProjectBtn" type="button" aria-label="Nuevo proyecto" title="Nuevo proyecto">+</button>
+      </header>
+
+      <main>
+        <section class="panel project-panel" aria-label="Datos del modelo">
+          <label>
+            <span>Nombre del modelo</span>
+            <input id="modelName" type="text" autocomplete="off" value="Nuevo modelo">
+          </label>
+          <div class="size-grid">
+            <label>
+              <span>Tamano X</span>
+              <input id="sizeX" type="number" min="1" max="64" step="1" value="12">
+            </label>
+            <label>
+              <span>Tamano Y</span>
+              <input id="sizeY" type="number" min="1" max="64" step="1" value="12">
+            </label>
+          </div>
+          <div class="stats" id="stats" aria-live="polite"></div>
+        </section>
+
+        <section class="panel reference-panel" aria-label="Imagen de referencia">
+          <div class="section-row">
+            <h2>Referencia del manual</h2>
+            <label class="file-button">
+              Agregar imagen de referencia
+              <input id="referenceInput" type="file" accept="image/*">
+            </label>
+          </div>
+          <div class="reference-tools" id="referenceTools" hidden>
+            <button id="toggleReferenceBtn" type="button">Ocultar</button>
+            <label class="range-label">
+              Zoom
+              <input id="referenceZoom" type="range" min="50" max="250" value="100">
+            </label>
+            <button id="fullscreenReferenceBtn" type="button">Pantalla completa</button>
+          </div>
+          <div class="reference-view" id="referenceView" hidden>
+            <img id="referenceImage" alt="Imagen de referencia seleccionada">
+          </div>
+        </section>
+
+        <section class="editor-area" aria-label="Editor de matriz">
+          <div class="embedded-editor-controls">
+            <div class="embedded-control-block" aria-label="Paleta de colores">
+              <h2>Paleta de colores</h2>
+              <div class="palette" id="palette"></div>
+            </div>
+            <div class="embedded-control-block" aria-label="Herramientas">
+              <h2>Herramientas</h2>
+              <div class="button-grid">
+                <button class="tool active" data-tool="paint" type="button">Pintar</button>
+                <button class="tool" data-tool="erase" type="button">Borrar</button>
+                <button class="tool" data-tool="fill" type="button">Rellenar</button>
+                <button class="tool" data-tool="select" type="button">Seleccionar</button>
+                <button class="tool" data-tool="reference" type="button">Referencia</button>
+                <button id="clearLayerBtn" type="button">Limpiar capa</button>
+                <button id="undoBtn" type="button">Deshacer</button>
+                <button id="redoBtn" type="button">Rehacer</button>
+              </div>
+            </div>
+          </div>
+          <div class="editor-toolbar">
+            <div>
+              <strong id="layerLabel">Capa actual Z: 0 / 1</strong>
+            </div>
+            <label class="zoom-control">
+              Zoom
+              <input id="gridZoom" type="range" min="24" max="56" value="34">
+            </label>
+          </div>
+          <div class="grid-scroller" id="gridScroller">
+            <div class="matrix-grid" id="matrixGrid" aria-label="Cuadricula editable"></div>
+          </div>
+          <div class="layer-workbar" aria-label="Control rapido de capas">
+            <div class="layer-main-row">
+              <button id="prevLayerBtn" type="button" aria-label="Capa anterior">&lt;</button>
+              <div class="layer-readout">
+                <strong id="layerWorkLabel">Capa Z: 0</strong>
+                <span id="layerWorkMeta">1 de 1  Bloques: 0</span>
+              </div>
+              <button id="nextLayerBtn" type="button" aria-label="Capa siguiente">&gt;</button>
+              <button id="newLayerBtn" type="button">+ Nueva</button>
+            </div>
+            <div class="layer-secondary-row">
+              <button id="copyPrevLayerBtn" type="button">Copiar anterior</button>
+              <button id="duplicateLayerBtn" type="button">Duplicar</button>
+              <button id="deleteLayerBtn" type="button">Eliminar</button>
+            </div>
+          </div>
+          <div class="organization-toggle-row">
+            <label class="checkbox-label">
+              <input id="showOrganizationToggle" type="checkbox">
+              <span>Mostrar organizacion</span>
+            </label>
+            <span id="organizationOutdated" class="organization-outdated" hidden>La organizacion necesita actualizarse</span>
+          </div>
+          <div class="active-references compact-references" aria-label="Referencias activas">
+            <h2>Referencias activas</h2>
+            <div class="reference-list" id="activeReferences"></div>
+          </div>
+          <div class="advanced-actions">
+            <button id="open3dBtn" class="wide-button" type="button">Vista 3D</button>
+            <button id="openOrganizerBtn" class="wide-button" type="button">Organizar bloques</button>
+            <button id="openPdfBtn" class="wide-button" type="button">Exportar PDF</button>
+          </div>
+        </section>
+
+        <section class="panel io-panel" aria-label="Guardar y exportar">
+          <h2>Guardar/exportar</h2>
+          <div class="button-grid">
+            <button id="exportBtn" type="button">Guardar como .bricklayers</button>
+            <label class="file-button">
+              Abrir .bricklayers
+              <input id="importInput" type="file" accept=".bricklayers,application/json">
+            </label>
+          </div>
+          <p class="status" id="status" role="status" aria-live="polite"></p>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="referenceDialog" class="reference-dialog">
+      <button id="closeReferenceDialog" class="dialog-close" type="button" aria-label="Cerrar">x</button>
+      <img id="referenceDialogImage" alt="Imagen de referencia ampliada">
+    </dialog>
+
+    <dialog id="pointDialog" class="point-dialog">
+      <form method="dialog" id="pointForm">
+        <h2 id="pointDialogTitle">Punto de referencia</h2>
+        <label>
+          <span>Etiqueta</span>
+          <input id="pointLabel" type="text" autocomplete="off" placeholder="opcional">
+        </label>
+        <label class="checkbox-label" id="pointPersistentWrap">
+          <input id="pointPersistent" type="checkbox" checked>
+          <span>Mantener en siguientes capas</span>
+        </label>
+        <div class="point-actions">
+          <button id="savePointBtn" type="submit" value="save">Guardar</button>
+          <button id="cancelPointBtn" type="button">Cancelar</button>
+          <button id="finishPointBtn" type="button" hidden>Finalizar desde esta capa</button>
+          <button id="deletePointBtn" class="danger-button" type="button" hidden>Eliminar completamente</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="viewer3dDialog" class="viewer3d-dialog">
+      <div class="viewer3d-shell">
+        <div class="viewer3d-topbar">
+          <div class="viewer3d-info" id="viewer3dInfo"></div>
+          <button id="close3dBtn" type="button">Cerrar</button>
+        </div>
+        <div class="viewer3d-toolbar" aria-label="Controles del visor 3D">
+          <button data-view3d="iso" type="button">Isometrica</button>
+          <button data-view3d="front" type="button">Frente</button>
+          <button data-view3d="back" type="button">Atras</button>
+          <button data-view3d="left" type="button">Izquierda</button>
+          <button data-view3d="right" type="button">Derecha</button>
+          <button data-view3d="top" type="button">Arriba</button>
+          <button id="recenter3dBtn" type="button">Recentrar</button>
+        </div>
+        <div class="viewer3d-layer-control">
+          <label>
+            <span>Mostrar hasta capa Z</span>
+            <select id="viewer3dLayerSelect"></select>
+          </label>
+          <label class="checkbox-label">
+            <input id="viewer3dAllLayers" type="checkbox">
+            <span>Toda la figura</span>
+          </label>
+        </div>
+        <div class="viewer3d-canvas-wrap" id="viewer3dCanvasWrap">
+          <div class="axis-legend" aria-hidden="true">
+            <span class="axis-x">X</span>
+            <span class="axis-y">Y</span>
+            <span class="axis-z">Z</span>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="organizerDialog" class="organizer-dialog">
+      <div class="organizer-shell">
+        <div class="section-row">
+          <h2>Organizar bloques</h2>
+          <button id="closeOrganizerBtn" type="button">Cerrar</button>
+        </div>
+        <div class="organizer-controls">
+          <label>
+            <span>Tamano maximo de pieza</span>
+            <select id="organizerMaxLength">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+            </select>
+          </label>
+          <label>
+            <span>Prioridad de organizacion</span>
+            <select id="organizerPriority">
+              <option value="stability">Estabilidad</option>
+              <option value="balanced" selected>Equilibrado</option>
+              <option value="least_pieces">Menos piezas</option>
+            </select>
+          </label>
+          <button id="runOrganizerBtn" type="button">Reorganizar</button>
+        </div>
+        <div id="organizerSummary" class="organizer-summary"></div>
+        <div id="organizerInventory" class="organizer-results"></div>
+        <div id="organizerLayerStats" class="organizer-results"></div>
+        <div id="organizerWarnings" class="organizer-results"></div>
+      </div>
+    </dialog>
+
+    <dialog id="pdfDialog" class="pdf-dialog">
+      <div class="pdf-shell">
+        <div class="section-row">
+          <h2>Generar manual PDF</h2>
+          <button id="closePdfBtn" type="button">Cerrar</button>
+        </div>
+
+        <section class="pdf-section">
+          <h3>Tipo</h3>
+          <label>
+            <span>Perfil</span>
+            <select id="pdfProfile">
+              <option value="quick">PDF rapido</option>
+              <option value="professional">PDF profesional</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="pdf-section">
+          <h3>Capas</h3>
+          <label class="checkbox-label">
+            <input id="pdfAllLayers" type="checkbox" checked>
+            <span>Todas</span>
+          </label>
+          <div class="pdf-range">
+            <label>
+              <span>Desde Z</span>
+              <input id="pdfFromZ" type="number" step="1">
+            </label>
+            <label>
+              <span>Hasta Z</span>
+              <input id="pdfToZ" type="number" step="1">
+            </label>
+          </div>
+        </section>
+
+        <details class="pdf-section">
+          <summary>Opciones avanzadas</summary>
+          <div class="pdf-options">
+            <label class="checkbox-label"><input id="pdfShowLayerNumber" type="checkbox" checked><span>Numero de capa</span></label>
+            <label class="checkbox-label"><input id="pdfShowMatrix" type="checkbox" checked><span>Matriz</span></label>
+            <label class="checkbox-label"><input id="pdfShowColors" type="checkbox" checked><span>Colores</span></label>
+            <label class="checkbox-label"><input id="pdfShowPieces" type="checkbox" checked><span>Division de piezas</span></label>
+            <label class="checkbox-label"><input id="pdfShowReferences" type="checkbox" checked><span>Referencias</span></label>
+            <label class="checkbox-label"><input id="pdfShowLayerPieces" type="checkbox" checked><span>Cantidad de piezas por capa</span></label>
+            <label class="checkbox-label"><input id="pdfShowInventory" type="checkbox"><span>Inventario</span></label>
+            <label class="checkbox-label"><input id="pdfShow3d" type="checkbox"><span>Vista 3D</span></label>
+            <label class="checkbox-label"><input id="pdfShowStats" type="checkbox" checked><span>Estadisticas</span></label>
+            <label class="checkbox-label"><input id="pdfShowPieceIds" type="checkbox"><span>Mostrar ID de pieza</span></label>
+            <label>
+              <span>Vista 3D</span>
+              <select id="pdf3dFrequency">
+                <option value="cover">Solo portada</option>
+                <option value="every10">Cada 10 capas</option>
+                <option value="every5">Cada 5 capas</option>
+                <option value="everyLayer">Cada capa</option>
+              </select>
+            </label>
+            <label>
+              <span>Pagina</span>
+              <select id="pdfOrientation">
+                <option value="auto">Automatico</option>
+                <option value="portrait">Vertical</option>
+                <option value="landscape">Horizontal</option>
+              </select>
+            </label>
+          </div>
+        </details>
+
+        <div id="pdfOutdatedWarning" class="pdf-warning" hidden>
+          La organizacion de bloques esta desactualizada.
+          <button id="pdfReorganizeFirstBtn" type="button">Reorganizar primero</button>
+          <button id="pdfWithoutOrganizationBtn" type="button">Generar sin organizacion</button>
+        </div>
+
+        <div id="pdfSummary" class="pdf-summary"></div>
+        <div class="pdf-progress">
+          <progress id="pdfProgress" value="0" max="100"></progress>
+          <span id="pdfProgressText">Listo</span>
+        </div>
+        <div class="pdf-actions">
+          <button id="generatePdfBtn" type="button">Generar PDF</button>
+          <button id="downloadPdfBtn" type="button" disabled>Descargar PDF</button>
+          <button id="sharePdfBtn" type="button" disabled>Compartir</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="./vendor/jspdf/jspdf.umd.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
