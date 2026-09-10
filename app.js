@@ -1,31 +1,9 @@
-"use strict";
+import { BRICKLAYER_COLORS, COLOR_NAMES, DEFAULT_PALETTE } from "./palette.js";
 
 const STORAGE_KEY = "bricklayer-mobile-project-v1";
-const COLOR_NAMES = {
-  A: "amarillo",
-  N: "negro",
-  R: "rojo",
-  B: "blanco",
-  C: "cian",
-  M: "marron",
-  P: "piel",
-  G: "gris",
-  V: "verde",
-  L: "morado"
-};
-
-const defaultPalette = {
-  A: "#F4C400",
-  N: "#111111",
-  R: "#D62828",
-  B: "#F2F2F2",
-  C: "#27C2D1",
-  M: "#9B5A2E",
-  P: "#D9A074",
-  G: "#808080",
-  V: "#009B55",
-  L: "#7B3FB2"
-};
+const defaultPalette = DEFAULT_PALETTE;
+const COLOR_SHORTCUTS = new Set(BRICKLAYER_COLORS.map((color) => color.code));
+const DESKTOP_QUERY = "(min-width: 900px) and (pointer: fine)";
 
 const state = {
   project: createProject(12, 12),
@@ -35,6 +13,9 @@ const state = {
   undoStack: [],
   redoStack: [],
   isDrawing: false,
+  editorLocked: !window.matchMedia(DESKTOP_QUERY).matches,
+  dragPaintEnabled: window.matchMedia(DESKTOP_QUERY).matches,
+  dragStart: null,
   lastTouched: null,
   pendingPoint: null,
   editingReferenceId: null,
@@ -49,11 +30,20 @@ const els = {
   stats: document.getElementById("stats"),
   palette: document.getElementById("palette"),
   grid: document.getElementById("matrixGrid"),
+  editorModeBtn: document.getElementById("editorModeBtn"),
+  dragPaintToggle: document.getElementById("dragPaintToggle"),
+  activeToolLabel: document.getElementById("activeToolLabel"),
+  activeColorLabel: document.getElementById("activeColorLabel"),
+  activeZoomLabel: document.getElementById("activeZoomLabel"),
+  nextReferenceLabel: document.getElementById("nextReferenceLabel"),
   activeReferences: document.getElementById("activeReferences"),
   layerWorkLabel: document.getElementById("layerWorkLabel"),
   layerWorkMeta: document.getElementById("layerWorkMeta"),
   gridScroller: document.getElementById("gridScroller"),
   gridZoom: document.getElementById("gridZoom"),
+  zoomInBtn: document.getElementById("zoomInBtn"),
+  zoomOutBtn: document.getElementById("zoomOutBtn"),
+  fitZoomBtn: document.getElementById("fitZoomBtn"),
   layerLabel: document.getElementById("layerLabel"),
   status: document.getElementById("status"),
   newProjectBtn: document.getElementById("newProjectBtn"),
@@ -77,6 +67,7 @@ const els = {
   referenceView: document.getElementById("referenceView"),
   referenceImage: document.getElementById("referenceImage"),
   referenceZoom: document.getElementById("referenceZoom"),
+  referenceOpacity: document.getElementById("referenceOpacity"),
   toggleReferenceBtn: document.getElementById("toggleReferenceBtn"),
   fullscreenReferenceBtn: document.getElementById("fullscreenReferenceBtn"),
   referenceDialog: document.getElementById("referenceDialog"),
@@ -330,6 +321,7 @@ function render() {
   els.sizeX.value = state.project.size.x;
   els.sizeY.value = state.project.size.y;
   renderLayerLabel();
+  renderEditorState();
   renderGrid();
   renderActiveReferences();
   renderStats();
@@ -337,9 +329,37 @@ function render() {
 }
 
 function renderLayerLabel() {
-  els.layerLabel.textContent = `Capa actual Z: ${currentLayer().z} / ${state.project.layers.length}`;
+  els.layerLabel.textContent = `Capa ${state.currentLayer + 1}/${state.project.layers.length}`;
   els.layerWorkLabel.textContent = `Capa Z: ${currentLayer().z}`;
   els.layerWorkMeta.textContent = `${state.currentLayer + 1} de ${state.project.layers.length}  Bloques: ${countLayerBlocks(currentLayer())}`;
+}
+
+function renderEditorState() {
+  const colorName = COLOR_NAMES[state.selectedColor] || "";
+  const toolName = toolLabel(state.tool);
+  const modeText = state.editorLocked ? "NAVEGAR" : "EDITAR";
+  els.editorModeBtn.textContent = state.editorLocked ? "NAVEGAR" : "EDITAR";
+  els.editorModeBtn.classList.toggle("locked", state.editorLocked);
+  els.editorModeBtn.setAttribute("aria-pressed", String(!state.editorLocked));
+  els.gridScroller.classList.toggle("editor-locked", state.editorLocked);
+  els.gridScroller.classList.toggle("drag-disabled", !state.dragPaintEnabled);
+  els.activeToolLabel.textContent = `${modeText} | ${toolName}`;
+  els.activeColorLabel.textContent = `${state.selectedColor} ${colorName}`;
+  els.activeZoomLabel.textContent = `${els.gridZoom.value}px`;
+  els.nextReferenceLabel.textContent = state.tool === "reference" ? `Siguiente: ${nextReferenceId()}` : "";
+  els.dragPaintToggle.checked = state.dragPaintEnabled;
+}
+
+function toolLabel(tool) {
+  const labels = {
+    paint: "Pintar",
+    erase: "Borrar",
+    fill: "Rellenar",
+    select: "Seleccionar",
+    template: "Plantilla",
+    reference: "Referencia"
+  };
+  return labels[tool] || tool;
 }
 
 function renderStats() {
@@ -361,16 +381,15 @@ function countLayerBlocks(layer) {
 
 function renderPalette() {
   els.palette.innerHTML = "";
-  Object.entries(state.project.palette).forEach(([code, color]) => {
+  BRICKLAYER_COLORS.forEach(({ code }) => {
+    const color = state.project.palette[code] || defaultPalette[code];
     const button = document.createElement("button");
     button.type = "button";
     button.className = `palette-button${code === state.selectedColor ? " active" : ""}`;
     button.dataset.color = code;
-    button.innerHTML = `<span class="swatch" style="background:${color}"></span><span>${code} ${COLOR_NAMES[code] || ""}</span>`;
-    button.addEventListener("click", () => {
-      state.selectedColor = code;
-      renderPalette();
-    });
+    button.title = `${code} ${COLOR_NAMES[code] || ""}`;
+    button.innerHTML = `<span class="swatch" style="background:${color}"></span><span>${code} ${COLOR_NAMES[code] || ""}</span><kbd>${code}</kbd>`;
+    button.addEventListener("click", () => selectColor(code));
     els.palette.appendChild(button);
   });
 }
@@ -412,6 +431,9 @@ function renderGrid() {
       cell.ariaLabel = `X ${col + 1}, Y ${row + 1}`;
       cell.style.background = code === "." ? "" : state.project.palette[code];
       const referencesHere = activeReferences.filter((reference) => reference.x === col && reference.y === row);
+      if (referencesHere.length) {
+        cell.ariaLabel += `, Referencias ${referencesHere.map((reference) => reference.id).join(", ")}, Capa ${currentLayer().z}`;
+      }
       referencesHere.forEach((reference) => {
         const marker = document.createElement("span");
         marker.className = "reference-marker";
@@ -459,7 +481,7 @@ function activeReferencesForCurrentLayer() {
 }
 
 function renderActiveReferences() {
-  const references = activeReferencesForCurrentLayer();
+  const references = state.project.references.slice().sort(compareReferenceIds);
   els.activeReferences.innerHTML = "";
   if (!references.length) {
     const empty = document.createElement("div");
@@ -478,7 +500,7 @@ function renderActiveReferences() {
     const title = document.createElement("span");
     title.textContent = `${reference.id} ${reference.label || ""}`.trim();
     const position = document.createElement("small");
-    position.textContent = `X ${reference.x + 1}, Y ${reference.y + 1}`;
+    position.textContent = `X ${reference.x + 1}, Y ${reference.y + 1}, Capa ${reference.start_z}`;
     name.append(title, position);
 
     const locate = document.createElement("button");
@@ -511,21 +533,27 @@ function updateButtons() {
   els.deleteLayerBtn.disabled = state.project.layers.length === 1;
   els.undoBtn.disabled = state.undoStack.length === 0;
   els.redoBtn.disabled = state.redoStack.length === 0;
+  renderEditorState();
 }
 
 function paintAt(col, row) {
+  if (state.editorLocked) return;
   if (state.tool === "reference") {
     const existing = findActiveReferenceAt(col, row);
     if (existing) {
       openEditReferenceDialog(existing.id);
       return;
     }
-    openCreateReferenceDialog(col, row);
+    createReferenceAt(col, row);
     return;
   }
   if (state.tool === "select") {
     const reference = findActiveReferenceAt(col, row);
     if (reference) openEditReferenceDialog(reference.id);
+    return;
+  }
+  if (state.tool === "template") {
+    setStatus("Plantilla activa.");
     return;
   }
   const matrix = currentLayer().matrix;
@@ -573,17 +601,26 @@ function fillFrom(col, row) {
 function beginDraw(event) {
   const cell = event.target.closest(".cell");
   if (!cell) return;
+  if (state.editorLocked || event.pointerType === "touch" && event.isPrimary === false) return;
   event.preventDefault();
   state.isDrawing = true;
   state.lastTouched = null;
-  if (state.tool !== "fill" && state.tool !== "reference" && state.tool !== "select") pushHistory();
+  state.dragStart = { x: event.clientX, y: event.clientY, moved: false };
+  if (state.tool !== "fill" && state.tool !== "reference" && state.tool !== "select" && state.tool !== "template") pushHistory();
   touchCell(cell);
 }
 
 function moveDraw(event) {
   if (!state.isDrawing || state.tool === "fill" || state.tool === "reference" || state.tool === "select") return;
-  event.preventDefault();
+  if (!state.dragPaintEnabled) return;
   const point = event.touches ? event.touches[0] : event;
+  if (state.dragStart && !state.dragStart.moved) {
+    const dx = Math.abs(point.clientX - state.dragStart.x);
+    const dy = Math.abs(point.clientY - state.dragStart.y);
+    if (dx < 10 && dy < 10) return;
+    state.dragStart.moved = true;
+  }
+  event.preventDefault();
   const target = document.elementFromPoint(point.clientX, point.clientY);
   const cell = target?.closest(".cell");
   if (cell && els.grid.contains(cell)) touchCell(cell);
@@ -592,6 +629,7 @@ function moveDraw(event) {
 function endDraw() {
   state.isDrawing = false;
   state.lastTouched = null;
+  state.dragStart = null;
 }
 
 function touchCell(cell) {
@@ -619,12 +657,29 @@ function openCreateReferenceDialog(col, row) {
   els.pointDialog.showModal();
 }
 
+function createReferenceAt(col, row) {
+  const z = currentLayer().z;
+  const id = nextReferenceId();
+  pushHistory();
+  state.project.references.push({
+    id,
+    x: col,
+    y: row,
+    start_z: z,
+    end_z: null,
+    label: ""
+  });
+  state.project.references.sort(compareReferenceIds);
+  render();
+  markChanged(`${id} creada en X ${col + 1}, Y ${row + 1}, Capa ${z}.`);
+}
+
 function openEditReferenceDialog(id) {
   const reference = state.project.references.find((item) => item.id === id);
   if (!reference) return;
   state.pendingPoint = null;
   state.editingReferenceId = id;
-  els.pointDialogTitle.textContent = `${reference.id} en X ${reference.x + 1}, Y ${reference.y + 1}`;
+  els.pointDialogTitle.textContent = `${reference.id} | X ${reference.x + 1} | Y ${reference.y + 1} | Capa ${reference.start_z}`;
   els.pointLabel.value = reference.label || "";
   els.pointPersistentWrap.hidden = true;
   els.finishPointBtn.hidden = false;
@@ -690,6 +745,11 @@ function deleteReference(id) {
 }
 
 function locateReference(reference) {
+  const targetLayer = state.project.layers.findIndex((layer) => layer.z === reference.start_z);
+  if (targetLayer !== -1 && targetLayer !== state.currentLayer) {
+    state.currentLayer = targetLayer;
+    render();
+  }
   const cell = els.grid.querySelector(`.cell[data-x="${reference.x}"][data-y="${reference.y}"]`);
   if (!cell) return;
   cell.scrollIntoView({ block: "center", inline: "center" });
@@ -1021,6 +1081,152 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function selectColor(code) {
+  if (!COLOR_SHORTCUTS.has(code)) return;
+  state.selectedColor = code;
+  state.tool = "paint";
+  renderPalette();
+  updateButtons();
+  setStatus(`PINTAR | ${code} ${COLOR_NAMES[code] || ""}`);
+}
+
+function setTool(tool) {
+  state.tool = tool;
+  updateButtons();
+  if (tool === "reference") setStatus(`REFERENCIA | Siguiente: ${nextReferenceId()}`);
+  else setStatus(toolLabel(tool).toUpperCase());
+}
+
+function previousLayer() {
+  if (state.currentLayer <= 0) return;
+  state.currentLayer -= 1;
+  render();
+}
+
+function nextLayer() {
+  if (state.currentLayer >= state.project.layers.length - 1) return;
+  state.currentLayer += 1;
+  render();
+}
+
+function firstLayer() {
+  if (state.currentLayer === 0) return;
+  state.currentLayer = 0;
+  render();
+}
+
+function lastLayer() {
+  const last = state.project.layers.length - 1;
+  if (state.currentLayer === last) return;
+  state.currentLayer = last;
+  render();
+}
+
+function undo() {
+  if (!state.undoStack.length) return;
+  state.redoStack.push(JSON.stringify(state.project));
+  restoreProject(state.undoStack.pop());
+  setStatus("Deshacer aplicado.");
+}
+
+function redo() {
+  if (!state.redoStack.length) return;
+  state.undoStack.push(JSON.stringify(state.project));
+  restoreProject(state.redoStack.pop());
+  setStatus("Rehacer aplicado.");
+}
+
+function toggleEditorLock() {
+  state.editorLocked = !state.editorLocked;
+  renderEditorState();
+  setStatus(state.editorLocked ? "NAVEGAR" : "EDITAR");
+}
+
+function setZoom(value) {
+  els.gridZoom.value = String(clamp(Number(value), Number(els.gridZoom.min), Number(els.gridZoom.max)));
+  renderGrid();
+  renderEditorState();
+}
+
+function zoomIn() {
+  setZoom(Number(els.gridZoom.value) + 4);
+}
+
+function zoomOut() {
+  setZoom(Number(els.gridZoom.value) - 4);
+}
+
+function fitZoom() {
+  const available = Math.max(160, els.gridScroller.clientWidth - 34);
+  const cell = Math.floor(available / Math.max(1, state.project.size.x));
+  setZoom(cell);
+}
+
+function shouldIgnoreShortcut(event) {
+  const target = event.target;
+  if (!target) return false;
+  const tag = target.tagName;
+  if (target.isContentEditable) return true;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  const dialog = target.closest?.("dialog");
+  return Boolean(dialog?.open && dialog.querySelector("input:focus, textarea:focus, select:focus, [contenteditable='true']:focus"));
+}
+
+function handleKeyboard(event) {
+  if (shouldIgnoreShortcut(event)) return;
+  const key = event.key.toLowerCase();
+  const upper = key.toUpperCase();
+
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
+  if (COLOR_SHORTCUTS.has(upper)) {
+    event.preventDefault();
+    selectColor(upper);
+    return;
+  }
+  if (key === "k") {
+    event.preventDefault();
+    addLayer();
+  } else if (key === "d") {
+    event.preventDefault();
+    duplicateCurrentLayer();
+  } else if (key === "z") {
+    event.preventDefault();
+    undo();
+  } else if (key === "y") {
+    event.preventDefault();
+    redo();
+  } else if (key === "e") {
+    event.preventDefault();
+    setTool("erase");
+  } else if (key === "f") {
+    event.preventDefault();
+    setTool("reference");
+  } else if (key === "t") {
+    event.preventDefault();
+    setTool("template");
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    if (event.shiftKey) firstLayer();
+    else previousLayer();
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    if (event.shiftKey) lastLayer();
+    else nextLayer();
+  } else if (event.key === " ") {
+    event.preventDefault();
+    toggleEditorLock();
+  } else if (event.key === "+" || event.key === "=") {
+    event.preventDefault();
+    zoomIn();
+  } else if (event.key === "-") {
+    event.preventDefault();
+    zoomOut();
+  } else if (event.key === "0") {
+    event.preventDefault();
+    fitZoom();
+  }
+}
+
 function addLayer() {
   const targetZ = currentLayer().z + 1;
   const existingIndex = state.project.layers.findIndex((layer) => layer.z === targetZ);
@@ -1174,7 +1380,18 @@ function bindEvents() {
   });
   els.sizeX.addEventListener("change", resizeProject);
   els.sizeY.addEventListener("change", resizeProject);
-  els.gridZoom.addEventListener("input", renderGrid);
+  els.gridZoom.addEventListener("input", () => {
+    renderGrid();
+    renderEditorState();
+  });
+  els.zoomInBtn.addEventListener("click", zoomIn);
+  els.zoomOutBtn.addEventListener("click", zoomOut);
+  els.fitZoomBtn.addEventListener("click", fitZoom);
+  els.editorModeBtn.addEventListener("click", toggleEditorLock);
+  els.dragPaintToggle.addEventListener("change", () => {
+    state.dragPaintEnabled = els.dragPaintToggle.checked;
+    renderEditorState();
+  });
 
   els.grid.addEventListener("pointerdown", beginDraw);
   els.grid.addEventListener("pointermove", moveDraw);
@@ -1183,41 +1400,20 @@ function bindEvents() {
 
   document.querySelectorAll(".tool").forEach((button) => {
     button.addEventListener("click", () => {
-      state.tool = button.dataset.tool;
-      updateButtons();
+      setTool(button.dataset.tool);
     });
   });
 
-  els.prevLayerBtn.addEventListener("click", () => {
-    if (state.currentLayer > 0) {
-      state.currentLayer -= 1;
-      render();
-    }
-  });
-  els.nextLayerBtn.addEventListener("click", () => {
-    if (state.currentLayer < state.project.layers.length - 1) {
-      state.currentLayer += 1;
-      render();
-    }
-  });
+  els.prevLayerBtn.addEventListener("click", previousLayer);
+  els.nextLayerBtn.addEventListener("click", nextLayer);
   els.newLayerBtn.addEventListener("click", addLayer);
   els.copyPrevLayerBtn.addEventListener("click", copyPreviousLayer);
   els.duplicateLayerBtn.addEventListener("click", duplicateCurrentLayer);
   els.deleteLayerBtn.addEventListener("click", deleteLayer);
   els.clearLayerBtn.addEventListener("click", clearLayer);
 
-  els.undoBtn.addEventListener("click", () => {
-    if (!state.undoStack.length) return;
-    state.redoStack.push(JSON.stringify(state.project));
-    restoreProject(state.undoStack.pop());
-    setStatus("Deshacer aplicado.");
-  });
-  els.redoBtn.addEventListener("click", () => {
-    if (!state.redoStack.length) return;
-    state.undoStack.push(JSON.stringify(state.project));
-    restoreProject(state.redoStack.pop());
-    setStatus("Rehacer aplicado.");
-  });
+  els.undoBtn.addEventListener("click", undo);
+  els.redoBtn.addEventListener("click", redo);
 
   els.newProjectBtn.addEventListener("click", () => {
     if (!confirm("Crear un nuevo proyecto y borrar el actual?")) return;
@@ -1308,6 +1504,7 @@ function bindEvents() {
     renderReference();
   });
   els.referenceZoom.addEventListener("input", renderReference);
+  els.referenceOpacity.addEventListener("input", renderReference);
   els.fullscreenReferenceBtn.addEventListener("click", () => {
     if (!state.referenceDataUrl) return;
     els.referenceDialogImage.src = state.referenceDataUrl;
@@ -1327,12 +1524,7 @@ function bindEvents() {
   els.deletePointBtn.addEventListener("click", () => {
     if (state.editingReferenceId) deleteReference(state.editingReferenceId);
   });
-  window.addEventListener("keydown", (event) => {
-    if (!event.ctrlKey || event.key.toLowerCase() !== "z") return;
-    event.preventDefault();
-    if (event.shiftKey) els.redoBtn.click();
-    else els.undoBtn.click();
-  });
+  window.addEventListener("keydown", handleKeyboard);
 }
 
 function renderReference() {
@@ -1342,6 +1534,7 @@ function renderReference() {
   els.toggleReferenceBtn.textContent = state.referenceVisible ? "Ocultar" : "Mostrar";
   if (hasImage) {
     els.referenceImage.src = state.referenceDataUrl;
+    els.referenceImage.style.opacity = String(Number(els.referenceOpacity.value) / 100);
     els.referenceView.style.setProperty("--reference-width", `${els.referenceZoom.value}%`);
   }
 }

@@ -42,6 +42,10 @@ El visor 3D usa Three.js local en `vendor/three/`, tambien incluido en la cache 
 
 ```bash
 node tests/organizer.test.mjs
+node tests/pdf-utils.test.mjs
+node tests/pdf-engine.test.mjs
+node tests/pdf-3d-capture.test.mjs
+node tests/editor-ux.test.mjs
 ```
 
 ## Formato

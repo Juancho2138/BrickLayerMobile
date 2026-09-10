@@ -1,9 +1,10 @@
-const CACHE_NAME = "bricklayer-mobile-v9";
+const CACHE_NAME = "bricklayer-mobile-v10";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./palette.js",
   "./viewer3d.js",
   "./organizer.js",
   "./pdf/pdf-utils.js",

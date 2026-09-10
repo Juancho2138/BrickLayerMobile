@@ -38,73 +38,128 @@
           <div class="stats" id="stats" aria-live="polite"></div>
         </section>
 
-        <section class="panel reference-panel" aria-label="Imagen de referencia">
-          <div class="section-row">
-            <h2>Referencia del manual</h2>
-            <label class="file-button">
-              Agregar imagen de referencia
-              <input id="referenceInput" type="file" accept="image/*">
-            </label>
-          </div>
-          <div class="reference-tools" id="referenceTools" hidden>
-            <button id="toggleReferenceBtn" type="button">Ocultar</button>
-            <label class="range-label">
-              Zoom
-              <input id="referenceZoom" type="range" min="50" max="250" value="100">
-            </label>
-            <button id="fullscreenReferenceBtn" type="button">Pantalla completa</button>
-          </div>
-          <div class="reference-view" id="referenceView" hidden>
-            <img id="referenceImage" alt="Imagen de referencia seleccionada">
-          </div>
-        </section>
-
         <section class="editor-area" aria-label="Editor de matriz">
-          <div class="embedded-editor-controls">
+          <div class="desktop-side left-side">
             <div class="embedded-control-block" aria-label="Paleta de colores">
-              <h2>Paleta de colores</h2>
+              <h2>Colores</h2>
               <div class="palette" id="palette"></div>
             </div>
+          </div>
+
+          <div class="editor-center">
+            <section class="reference-panel" aria-label="Imagen de referencia">
+              <div class="section-row">
+                <h2>Referencia del manual</h2>
+                <label class="file-button compact-file">
+                  Imagen
+                  <input id="referenceInput" type="file" accept="image/*">
+                </label>
+              </div>
+              <div class="reference-tools" id="referenceTools" hidden>
+                <button id="toggleReferenceBtn" type="button">Ocultar</button>
+                <label class="range-label">
+                  Zoom
+                  <input id="referenceZoom" type="range" min="50" max="250" value="100">
+                </label>
+                <label class="range-label">
+                  Opacidad
+                  <input id="referenceOpacity" type="range" min="20" max="100" value="100">
+                </label>
+                <button id="fullscreenReferenceBtn" type="button">Ampliar</button>
+              </div>
+              <div class="reference-view" id="referenceView" hidden>
+                <img id="referenceImage" alt="Imagen de referencia seleccionada">
+              </div>
+            </section>
+
+            <div class="editor-statusbar" aria-live="polite">
+              <strong id="layerLabel">Capa 1/1</strong>
+              <span id="activeToolLabel">EDITAR | Pintar</span>
+              <span id="activeColorLabel">A Amarillo</span>
+              <span id="activeZoomLabel">34px</span>
+              <span id="nextReferenceLabel"></span>
+            </div>
+            <button id="editorModeBtn" class="editor-mode-button" type="button" aria-pressed="true">EDITAR</button>
+            <div class="grid-wrap">
+              <div class="grid-scroller" id="gridScroller">
+                <div class="matrix-grid" id="matrixGrid" aria-label="Cuadricula editable"></div>
+              </div>
+              <div class="zoom-pad" aria-label="Zoom">
+                <button id="zoomInBtn" type="button" aria-label="Aumentar zoom">+</button>
+                <span id="zoomReadout">Zoom</span>
+                <button id="zoomOutBtn" type="button" aria-label="Reducir zoom">-</button>
+                <button id="fitZoomBtn" type="button">Ajustar</button>
+              </div>
+            </div>
+            <div class="layer-workbar" aria-label="Control rapido de capas">
+              <div class="layer-main-row">
+                <button id="prevLayerBtn" type="button" aria-label="Capa anterior">&lt;</button>
+                <div class="layer-readout">
+                  <strong id="layerWorkLabel">Capa Z: 0</strong>
+                  <span id="layerWorkMeta">1 de 1  Bloques: 0</span>
+                </div>
+                <button id="nextLayerBtn" type="button" aria-label="Capa siguiente">&gt;</button>
+                <button id="newLayerBtn" type="button">+ Nueva</button>
+              </div>
+              <div class="layer-secondary-row">
+                <button id="copyPrevLayerBtn" type="button">Copiar anterior</button>
+                <button id="duplicateLayerBtn" type="button">Duplicar</button>
+                <button id="deleteLayerBtn" type="button">Eliminar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="desktop-side right-side">
             <div class="embedded-control-block" aria-label="Herramientas">
               <h2>Herramientas</h2>
               <div class="button-grid">
                 <button class="tool active" data-tool="paint" type="button">Pintar</button>
-                <button class="tool" data-tool="erase" type="button">Borrar</button>
+                <button class="tool" data-tool="erase" type="button">E Borrar</button>
                 <button class="tool" data-tool="fill" type="button">Rellenar</button>
                 <button class="tool" data-tool="select" type="button">Seleccionar</button>
-                <button class="tool" data-tool="reference" type="button">Referencia</button>
+                <button class="tool" data-tool="reference" type="button">F Referencia</button>
+                <button class="tool" data-tool="template" type="button">T Plantilla</button>
                 <button id="clearLayerBtn" type="button">Limpiar capa</button>
                 <button id="undoBtn" type="button">Deshacer</button>
                 <button id="redoBtn" type="button">Rehacer</button>
               </div>
             </div>
-          </div>
-          <div class="editor-toolbar">
-            <div>
-              <strong id="layerLabel">Capa actual Z: 0 / 1</strong>
+            <div class="shortcut-panel" aria-label="Atajos de escritorio">
+              <h2>Atajos</h2>
+              <div><strong>COLORES</strong></div>
+              <div><kbd>A</kbd><kbd>N</kbd><kbd>R</kbd><kbd>B</kbd><kbd>C</kbd><kbd>M</kbd><kbd>P</kbd><kbd>G</kbd><kbd>V</kbd><kbd>L</kbd><kbd>U</kbd><kbd>S</kbd><kbd>O</kbd><kbd>I</kbd><kbd>Q</kbd></div>
+              <div><strong>HERRAMIENTAS</strong></div>
+              <div><kbd>E</kbd> Borrador</div>
+              <div><kbd>F</kbd> Referencia</div>
+              <div><kbd>T</kbd> Plantilla</div>
+              <div><strong>CAPAS</strong></div>
+              <div><kbd>K</kbd> Nueva capa</div>
+              <div><kbd>D</kbd> Duplicar capa</div>
+              <div><kbd>&larr;</kbd> Anterior</div>
+              <div><kbd>&rarr;</kbd> Siguiente</div>
+              <div><kbd>Shift</kbd>+<kbd>&larr;</kbd> Primera</div>
+              <div><kbd>Shift</kbd>+<kbd>&rarr;</kbd> Ultima</div>
+              <div><strong>HISTORIAL</strong></div>
+              <div><kbd>Z</kbd> Deshacer</div>
+              <div><kbd>Y</kbd> Rehacer</div>
+              <div><strong>EDITOR</strong></div>
+              <div><kbd>Espacio</kbd> Editar/Navegar</div>
+              <div><strong>ZOOM</strong></div>
+              <div><kbd>+</kbd> Acercar</div>
+              <div><kbd>-</kbd> Alejar</div>
+              <div><kbd>0</kbd> Ajustar</div>
             </div>
+            <label class="checkbox-label drag-toggle">
+              <input id="dragPaintToggle" type="checkbox">
+              <span>Pintar arrastrando</span>
+            </label>
             <label class="zoom-control">
               Zoom
               <input id="gridZoom" type="range" min="24" max="56" value="34">
             </label>
-          </div>
-          <div class="grid-scroller" id="gridScroller">
-            <div class="matrix-grid" id="matrixGrid" aria-label="Cuadricula editable"></div>
-          </div>
-          <div class="layer-workbar" aria-label="Control rapido de capas">
-            <div class="layer-main-row">
-              <button id="prevLayerBtn" type="button" aria-label="Capa anterior">&lt;</button>
-              <div class="layer-readout">
-                <strong id="layerWorkLabel">Capa Z: 0</strong>
-                <span id="layerWorkMeta">1 de 1  Bloques: 0</span>
-              </div>
-              <button id="nextLayerBtn" type="button" aria-label="Capa siguiente">&gt;</button>
-              <button id="newLayerBtn" type="button">+ Nueva</button>
-            </div>
-            <div class="layer-secondary-row">
-              <button id="copyPrevLayerBtn" type="button">Copiar anterior</button>
-              <button id="duplicateLayerBtn" type="button">Duplicar</button>
-              <button id="deleteLayerBtn" type="button">Eliminar</button>
+            <div class="active-references compact-references" aria-label="Referencias activas">
+              <h2>Referencias activas</h2>
+              <div class="reference-list" id="activeReferences"></div>
             </div>
           </div>
           <div class="organization-toggle-row">
@@ -113,10 +168,6 @@
               <span>Mostrar organizacion</span>
             </label>
             <span id="organizationOutdated" class="organization-outdated" hidden>La organizacion necesita actualizarse</span>
-          </div>
-          <div class="active-references compact-references" aria-label="Referencias activas">
-            <h2>Referencias activas</h2>
-            <div class="reference-list" id="activeReferences"></div>
           </div>
           <div class="advanced-actions">
             <button id="open3dBtn" class="wide-button" type="button">Vista 3D</button>
@@ -320,6 +371,6 @@
     </dialog>
 
     <script src="./vendor/jspdf/jspdf.umd.min.js"></script>
-    <script src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

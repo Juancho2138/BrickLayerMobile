@@ -57,7 +57,7 @@ button.active,
 }
 
 .app-shell {
-  width: min(100%, 760px);
+  width: min(100%, 1360px);
   margin: 0 auto;
   padding: env(safe-area-inset-top) 12px 22px;
 }
@@ -110,7 +110,8 @@ main {
 }
 
 .panel,
-.editor-area {
+.editor-area,
+.reference-panel {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -179,7 +180,7 @@ input[type="number"] {
 
 .reference-tools {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(120px, 1fr) minmax(120px, 1fr) auto;
   gap: 8px;
   align-items: center;
   margin-top: 10px;
@@ -207,7 +208,16 @@ input[type="number"] {
 }
 
 .editor-area {
+  display: grid;
+  gap: 10px;
   padding: 10px;
+}
+
+.desktop-side,
+.editor-center {
+  display: grid;
+  gap: 10px;
+  align-content: start;
 }
 
 .embedded-editor-controls {
@@ -221,8 +231,43 @@ input[type="number"] {
   gap: 8px;
 }
 
-.editor-toolbar {
-  margin-bottom: 10px;
+.editor-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10141d;
+  font-size: 0.92rem;
+}
+
+.editor-statusbar span,
+.editor-statusbar strong {
+  min-height: 28px;
+  display: inline-grid;
+  place-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #0b0f17;
+}
+
+.editor-mode-button {
+  width: 100%;
+  border-color: rgba(66, 214, 107, 0.85);
+  background: #11361e;
+  color: #d8ffe0;
+}
+
+.editor-mode-button.locked {
+  border-color: rgba(255, 209, 102, 0.85);
+  background: #3b2f10;
+  color: #ffe7a6;
+}
+
+.grid-wrap {
+  position: relative;
 }
 
 .grid-scroller {
@@ -233,6 +278,43 @@ input[type="number"] {
   border-radius: 8px;
   background: #0b0d12;
   touch-action: none;
+}
+
+.grid-scroller.editor-locked {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.grid-scroller.drag-disabled {
+  touch-action: pan-x pan-y pinch-zoom;
+}
+
+.zoom-pad {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  grid-template-columns: 40px 54px 40px;
+  gap: 5px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 13, 18, 0.9);
+}
+
+.zoom-pad button {
+  min-height: 36px;
+  padding: 6px;
+}
+
+.zoom-pad #fitZoomBtn {
+  grid-column: 1 / -1;
+}
+
+.zoom-pad span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
 }
 
 .matrix-grid {
@@ -452,6 +534,37 @@ input[type="number"] {
   gap: 4px;
   place-items: center;
   padding: 8px 4px;
+}
+
+kbd {
+  display: inline-grid;
+  min-width: 22px;
+  min-height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #0b0f17;
+  color: var(--text);
+  font: 800 0.78rem/1 system-ui, sans-serif;
+}
+
+.shortcut-panel {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10141d;
+  padding: 10px;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.shortcut-panel div {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .swatch {
@@ -808,6 +921,66 @@ input[type="number"] {
   }
 }
 
+@media (min-width: 900px) {
+  main {
+    grid-template-columns: 260px minmax(0, 1fr) 240px;
+    align-items: start;
+  }
+
+  .project-panel {
+    grid-column: 1;
+  }
+
+  .editor-area {
+    grid-column: 1 / -1;
+    grid-template-columns: 230px minmax(0, 1fr) 260px;
+    align-items: start;
+  }
+
+  .left-side {
+    grid-column: 1;
+    position: sticky;
+    top: 84px;
+  }
+
+  .editor-center {
+    grid-column: 2;
+  }
+
+  .right-side {
+    grid-column: 3;
+    position: sticky;
+    top: 84px;
+  }
+
+  .organization-toggle-row,
+  .advanced-actions {
+    grid-column: 2;
+  }
+
+  .io-panel {
+    grid-column: 3;
+  }
+
+  .grid-scroller {
+    max-height: 64vh;
+  }
+
+  .palette {
+    grid-template-columns: 1fr;
+  }
+
+  .palette-button {
+    grid-template-columns: 30px 1fr 26px;
+    min-height: 44px;
+    text-align: left;
+  }
+
+  .button-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 420px) {
   .reference-item {
     grid-template-columns: 1fr 1fr 1fr;
@@ -819,6 +992,10 @@ input[type="number"] {
 }
 
 @media (max-width: 520px) {
+  .reference-tools {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .layer-main-row {
     grid-template-columns: 46px minmax(0, 1fr) 46px;
   }

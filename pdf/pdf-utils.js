@@ -6,19 +6,7 @@ import {
   getStabilityReport,
   validateConstructionLayout
 } from "../organizer.js";
-
-export const COLOR_NAMES = {
-  A: "Amarillo",
-  N: "Negro",
-  R: "Rojo",
-  B: "Blanco",
-  C: "Cian",
-  M: "Marron",
-  P: "Piel",
-  G: "Gris",
-  V: "Verde",
-  L: "Morado"
-};
+export { COLOR_NAMES } from "../palette.js";
 
 export function sanitizePdfFileName(name, profile) {
   const base = String(name || "Modelo")
