@@ -6,6 +6,7 @@ import {
   getStabilityReport,
   validateConstructionLayout
 } from "../organizer.js";
+import { isReferenceVisibleAtZ } from "../reference-utils.js";
 export { COLOR_NAMES } from "../palette.js";
 
 export function sanitizePdfFileName(name, profile) {
@@ -32,9 +33,7 @@ export function selectLayers(project, settings) {
 }
 
 export function activeReferencesForLayer(project, z) {
-  return (project.references || []).filter((reference) => {
-    return reference.start_z <= z && (reference.end_z === null || z <= reference.end_z);
-  });
+  return (project.references || []).filter((reference) => isReferenceVisibleAtZ(reference, z));
 }
 
 export function ensurePdfLayout(project, settings) {

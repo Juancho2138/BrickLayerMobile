@@ -1,4 +1,5 @@
 import { BRICKLAYER_COLORS, COLOR_NAMES, DEFAULT_PALETTE } from "./palette.js";
+import { REFERENCE_TYPES, isReferenceVisibleAtZ, normalizeReferenceType, referenceTypeLabel } from "./reference-utils.js";
 
 const STORAGE_KEY = "bricklayer-mobile-project-v1";
 const defaultPalette = DEFAULT_PALETTE;
@@ -12,6 +13,8 @@ const state = {
   tool: "paint",
   undoStack: [],
   redoStack: [],
+  activePanel: null,
+  zoomMode: "manual",
   isDrawing: false,
   editorLocked: !window.matchMedia(DESKTOP_QUERY).matches,
   dragPaintEnabled: window.matchMedia(DESKTOP_QUERY).matches,
@@ -19,8 +22,18 @@ const state = {
   lastTouched: null,
   pendingPoint: null,
   editingReferenceId: null,
+  referenceMode: REFERENCE_TYPES.NORMAL,
   referenceVisible: true,
-  referenceDataUrl: ""
+  referenceDataUrl: "",
+  imageEditMode: false,
+  imageState: {
+    x: 16,
+    y: 16,
+    scale: 1,
+    opacity: 100,
+    blockOpacity: 100
+  },
+  imageDrag: null
 };
 
 const els = {
@@ -31,11 +44,13 @@ const els = {
   palette: document.getElementById("palette"),
   grid: document.getElementById("matrixGrid"),
   editorModeBtn: document.getElementById("editorModeBtn"),
+  quickEditorModeBtn: document.getElementById("quickEditorModeBtn"),
   dragPaintToggle: document.getElementById("dragPaintToggle"),
   activeToolLabel: document.getElementById("activeToolLabel"),
   activeColorLabel: document.getElementById("activeColorLabel"),
   activeZoomLabel: document.getElementById("activeZoomLabel"),
   nextReferenceLabel: document.getElementById("nextReferenceLabel"),
+  currentColorSwatch: document.getElementById("currentColorSwatch"),
   activeReferences: document.getElementById("activeReferences"),
   layerWorkLabel: document.getElementById("layerWorkLabel"),
   layerWorkMeta: document.getElementById("layerWorkMeta"),
@@ -46,6 +61,13 @@ const els = {
   fitZoomBtn: document.getElementById("fitZoomBtn"),
   layerLabel: document.getElementById("layerLabel"),
   status: document.getElementById("status"),
+  contextPanel: document.getElementById("contextPanel"),
+  contextPanelTitle: document.getElementById("contextPanelTitle"),
+  closeContextPanelBtn: document.getElementById("closeContextPanelBtn"),
+  settingsGridZoomMirror: document.getElementById("settingsGridZoomMirror"),
+  openShortcutsBtn: document.getElementById("openShortcutsBtn"),
+  shortcutsDialog: document.getElementById("shortcutsDialog"),
+  closeShortcutsBtn: document.getElementById("closeShortcutsBtn"),
   newProjectBtn: document.getElementById("newProjectBtn"),
   prevLayerBtn: document.getElementById("prevLayerBtn"),
   nextLayerBtn: document.getElementById("nextLayerBtn"),
@@ -57,19 +79,29 @@ const els = {
   undoBtn: document.getElementById("undoBtn"),
   redoBtn: document.getElementById("redoBtn"),
   exportBtn: document.getElementById("exportBtn"),
+  quickExportBtn: document.getElementById("quickExportBtn"),
   open3dBtn: document.getElementById("open3dBtn"),
+  quickOpen3dBtn: document.getElementById("quickOpen3dBtn"),
   openOrganizerBtn: document.getElementById("openOrganizerBtn"),
   showOrganizationToggle: document.getElementById("showOrganizationToggle"),
   organizationOutdated: document.getElementById("organizationOutdated"),
   importInput: document.getElementById("importInput"),
+  quickImportInput: document.getElementById("quickImportInput"),
   referenceInput: document.getElementById("referenceInput"),
   referenceTools: document.getElementById("referenceTools"),
   referenceView: document.getElementById("referenceView"),
   referenceImage: document.getElementById("referenceImage"),
   referenceZoom: document.getElementById("referenceZoom"),
   referenceOpacity: document.getElementById("referenceOpacity"),
+  blockOpacity: document.getElementById("blockOpacity"),
+  imageEditBtn: document.getElementById("imageEditBtn"),
+  imageScaleDownBtn: document.getElementById("imageScaleDownBtn"),
+  imageScaleUpBtn: document.getElementById("imageScaleUpBtn"),
+  imageCenterBtn: document.getElementById("imageCenterBtn"),
+  imageResetBtn: document.getElementById("imageResetBtn"),
   toggleReferenceBtn: document.getElementById("toggleReferenceBtn"),
   fullscreenReferenceBtn: document.getElementById("fullscreenReferenceBtn"),
+  referenceMode: document.getElementById("referenceMode"),
   referenceDialog: document.getElementById("referenceDialog"),
   referenceDialogImage: document.getElementById("referenceDialogImage"),
   closeReferenceDialog: document.getElementById("closeReferenceDialog"),
@@ -136,6 +168,7 @@ function createProject(x, y) {
     palette: { ...defaultPalette },
     revision: 0,
     references: [],
+    reference_image: normalizeReferenceImage(null),
     construction_layout: null,
     layers: [{ z: 0, matrix: createEmptyMatrix(x, y) }]
   };
@@ -176,8 +209,22 @@ function normalizeProject(project) {
     palette: { ...defaultPalette, ...palette },
     revision: Number.isInteger(project.revision) ? project.revision : 0,
     references: normalizeReferences(project, normalizedLayers, x, y),
+    reference_image: normalizeReferenceImage(project.reference_image),
     construction_layout: normalizeConstructionLayout(project.construction_layout, Number.isInteger(project.revision) ? project.revision : 0),
     layers: normalizedLayers
+  };
+}
+
+function normalizeReferenceImage(image) {
+  const source = image && typeof image === "object" ? image : {};
+  return {
+    data_url: typeof source.data_url === "string" ? source.data_url : "",
+    visible: source.visible !== false,
+    x: Number.isFinite(source.x) ? source.x : 16,
+    y: Number.isFinite(source.y) ? source.y : 16,
+    scale: Number.isFinite(source.scale) ? clamp(source.scale, 0.1, 5) : 1,
+    opacity: Number.isFinite(source.opacity) ? clamp(source.opacity, 0, 100) : 100,
+    block_opacity: Number.isFinite(source.block_opacity) ? clamp(source.block_opacity, 0, 100) : 100
   };
 }
 
@@ -222,14 +269,28 @@ function normalizeReferences(project, layers, x, y) {
 
 function addNormalizedReference(list, reference, x, y) {
   const id = typeof reference.id === "string" && reference.id.trim() ? reference.id.trim() : nextReferenceId(list);
-  const startZ = Number.isInteger(reference.start_z) ? reference.start_z : 0;
-  const endZ = Number.isInteger(reference.end_z) ? reference.end_z : null;
+  const type = normalizeReferenceType(reference.type);
+  const sourceZ = Number.isInteger(reference.source_z)
+    ? reference.source_z
+    : Number.isInteger(reference.start_z)
+      ? reference.start_z
+      : 0;
+  let startZ = Number.isInteger(reference.start_z) ? reference.start_z : sourceZ;
+  let endZ = Number.isInteger(reference.end_z) ? reference.end_z : null;
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) {
+    startZ = sourceZ + 1;
+    endZ = sourceZ + 1;
+  } else if (type === REFERENCE_TYPES.NORMAL && endZ !== null && endZ < startZ) {
+    endZ = null;
+  }
   const normalized = {
     id,
     x: Number.isInteger(reference.x) ? reference.x : 0,
     y: Number.isInteger(reference.y) ? reference.y : 0,
+    type,
+    source_z: sourceZ,
     start_z: startZ,
-    end_z: endZ !== null && endZ >= startZ ? endZ : null,
+    end_z: endZ,
     label: typeof reference.label === "string" ? reference.label : ""
   };
   list.push(normalized);
@@ -266,8 +327,10 @@ function pushHistory() {
 function restoreProject(serialized) {
   state.project = normalizeProject(JSON.parse(serialized));
   state.currentLayer = Math.min(state.currentLayer, state.project.layers.length - 1);
+  syncImageStateFromProject();
   renderPalette();
   render();
+  refitGridIfNeeded();
   saveProject();
 }
 
@@ -302,6 +365,7 @@ function markGeometryChanged(message) {
 }
 
 function saveProject() {
+  syncImageStateToProject();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.project));
 }
 
@@ -311,9 +375,36 @@ function loadProject() {
   try {
     state.project = normalizeProject(JSON.parse(saved));
     state.currentLayer = 0;
+    syncImageStateFromProject();
   } catch {
     setStatus("No se pudo recuperar el proyecto guardado.");
   }
+}
+
+function syncImageStateFromProject() {
+  const image = normalizeReferenceImage(state.project.reference_image);
+  state.project.reference_image = image;
+  state.referenceDataUrl = image.data_url;
+  state.referenceVisible = image.visible;
+  state.imageState = {
+    x: image.x,
+    y: image.y,
+    scale: image.scale,
+    opacity: image.opacity,
+    blockOpacity: image.block_opacity
+  };
+}
+
+function syncImageStateToProject() {
+  state.project.reference_image = {
+    data_url: state.referenceDataUrl,
+    visible: state.referenceVisible,
+    x: state.imageState.x,
+    y: state.imageState.y,
+    scale: state.imageState.scale,
+    opacity: state.imageState.opacity,
+    block_opacity: state.imageState.blockOpacity
+  };
 }
 
 function render() {
@@ -338,9 +429,14 @@ function renderEditorState() {
   const colorName = COLOR_NAMES[state.selectedColor] || "";
   const toolName = toolLabel(state.tool);
   const modeText = state.editorLocked ? "NAVEGAR" : "EDITAR";
+  const quickModeLabel = state.editorLocked ? "Edicion bloqueada tocar para editar" : "Edicion activa tocar para bloquear";
   els.editorModeBtn.textContent = state.editorLocked ? "NAVEGAR" : "EDITAR";
   els.editorModeBtn.classList.toggle("locked", state.editorLocked);
   els.editorModeBtn.setAttribute("aria-pressed", String(!state.editorLocked));
+  els.quickEditorModeBtn.classList.toggle("locked", state.editorLocked);
+  els.quickEditorModeBtn.setAttribute("aria-pressed", String(!state.editorLocked));
+  els.quickEditorModeBtn.setAttribute("aria-label", quickModeLabel);
+  els.quickEditorModeBtn.title = quickModeLabel;
   els.gridScroller.classList.toggle("editor-locked", state.editorLocked);
   els.gridScroller.classList.toggle("drag-disabled", !state.dragPaintEnabled);
   els.activeToolLabel.textContent = `${modeText} | ${toolName}`;
@@ -348,6 +444,8 @@ function renderEditorState() {
   els.activeZoomLabel.textContent = `${els.gridZoom.value}px`;
   els.nextReferenceLabel.textContent = state.tool === "reference" ? `Siguiente: ${nextReferenceId()}` : "";
   els.dragPaintToggle.checked = state.dragPaintEnabled;
+  if (els.referenceMode) els.referenceMode.value = state.referenceMode;
+  if (els.settingsGridZoomMirror) els.settingsGridZoomMirror.value = els.gridZoom.value;
 }
 
 function toolLabel(tool) {
@@ -381,6 +479,10 @@ function countLayerBlocks(layer) {
 
 function renderPalette() {
   els.palette.innerHTML = "";
+  const selectedHex = state.project.palette[state.selectedColor] || defaultPalette[state.selectedColor];
+  els.currentColorSwatch.textContent = state.selectedColor;
+  els.currentColorSwatch.style.background = selectedHex;
+  els.currentColorSwatch.style.color = contrastText(selectedHex);
   BRICKLAYER_COLORS.forEach(({ code }) => {
     const color = state.project.palette[code] || defaultPalette[code];
     const button = document.createElement("button");
@@ -388,10 +490,23 @@ function renderPalette() {
     button.className = `palette-button${code === state.selectedColor ? " active" : ""}`;
     button.dataset.color = code;
     button.title = `${code} ${COLOR_NAMES[code] || ""}`;
-    button.innerHTML = `<span class="swatch" style="background:${color}"></span><span>${code} ${COLOR_NAMES[code] || ""}</span><kbd>${code}</kbd>`;
+    button.style.setProperty("--swatch-color", color);
+    button.style.color = contrastText(color);
+    button.textContent = code;
+    button.setAttribute("aria-label", `${code} ${COLOR_NAMES[code] || ""}`);
     button.addEventListener("click", () => selectColor(code));
     els.palette.appendChild(button);
   });
+}
+
+function contrastText(hex) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!match) return "#ffffff";
+  const value = match[1];
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 >= 145 ? "#111111" : "#ffffff";
 }
 
 function renderGrid() {
@@ -401,6 +516,7 @@ function renderGrid() {
   els.grid.style.setProperty("--x", x);
   els.grid.style.setProperty("--y", y);
   els.grid.style.setProperty("--cell", `${els.gridZoom.value}px`);
+  els.grid.style.setProperty("--block-opacity", String(state.imageState.blockOpacity / 100));
   els.grid.innerHTML = "";
 
   const corner = document.createElement("div");
@@ -436,9 +552,9 @@ function renderGrid() {
       }
       referencesHere.forEach((reference) => {
         const marker = document.createElement("span");
-        marker.className = "reference-marker";
+        marker.className = `reference-marker ${referenceClass(reference)}`;
         const label = document.createElement("span");
-        label.textContent = reference.id;
+        label.textContent = referenceShortLabel(reference);
         marker.appendChild(label);
         cell.appendChild(marker);
       });
@@ -476,12 +592,12 @@ function organizationEdgeClasses(map, col, row) {
 function activeReferencesForCurrentLayer() {
   const z = currentLayer().z;
   return state.project.references
-    .filter((reference) => reference.start_z <= z && (reference.end_z === null || z <= reference.end_z))
+    .filter((reference) => isReferenceVisibleAtZ(reference, z))
     .sort(compareReferenceIds);
 }
 
 function renderActiveReferences() {
-  const references = state.project.references.slice().sort(compareReferenceIds);
+  const references = activeReferencesForCurrentLayer();
   els.activeReferences.innerHTML = "";
   if (!references.length) {
     const empty = document.createElement("div");
@@ -498,9 +614,9 @@ function renderActiveReferences() {
     const name = document.createElement("div");
     name.className = "reference-name";
     const title = document.createElement("span");
-    title.textContent = `${reference.id} ${reference.label || ""}`.trim();
+    title.textContent = `${referenceShortLabel(reference)} ${reference.label || ""}`.trim();
     const position = document.createElement("small");
-    position.textContent = `X ${reference.x + 1}, Y ${reference.y + 1}, Capa ${reference.start_z}`;
+    position.textContent = referenceMeta(reference);
     name.append(title, position);
 
     const locate = document.createElement("button");
@@ -518,14 +634,43 @@ function renderActiveReferences() {
     finish.textContent = "Finalizar";
     finish.addEventListener("click", () => finishReference(reference.id));
 
+    finish.hidden = normalizeReferenceType(reference.type) === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER;
+
     item.append(name, locate, edit, finish);
     els.activeReferences.appendChild(item);
   });
 }
 
+function referenceClass(reference) {
+  const type = normalizeReferenceType(reference.type);
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) return "reference-marker-temporary";
+  if (type === REFERENCE_TYPES.BACKWARD) return "reference-marker-backward";
+  return "reference-marker-normal";
+}
+
+function referenceShortLabel(reference) {
+  if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.BACKWARD) return `REF Z${reference.source_z}`;
+  return reference.id;
+}
+
+function referenceMeta(reference) {
+  const type = normalizeReferenceType(reference.type);
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) {
+    return `X ${reference.x + 1}, Y ${reference.y + 1}, origen Z${reference.source_z}, visible Z${reference.source_z + 1}`;
+  }
+  if (type === REFERENCE_TYPES.BACKWARD) {
+    const end = reference.end_z === null ? "Z0..." : `Z${reference.end_z}`;
+    return `X ${reference.x + 1}, Y ${reference.y + 1}, desde Z${reference.source_z} hacia ${end}`;
+  }
+  return `X ${reference.x + 1}, Y ${reference.y + 1}, desde Z${reference.start_z}`;
+}
+
 function updateButtons() {
   document.querySelectorAll(".tool").forEach((button) => {
     button.classList.toggle("active", button.dataset.tool === state.tool);
+  });
+  document.querySelectorAll(".reference-type-btn").forEach((button) => {
+    button.classList.toggle("active", normalizeReferenceType(button.dataset.referenceMode) === state.referenceMode);
   });
   els.prevLayerBtn.disabled = state.currentLayer === 0;
   els.nextLayerBtn.disabled = state.currentLayer >= state.project.layers.length - 1;
@@ -660,18 +805,21 @@ function openCreateReferenceDialog(col, row) {
 function createReferenceAt(col, row) {
   const z = currentLayer().z;
   const id = nextReferenceId();
+  const type = normalizeReferenceType(state.referenceMode);
   pushHistory();
   state.project.references.push({
     id,
     x: col,
     y: row,
-    start_z: z,
-    end_z: null,
+    type,
+    source_z: z,
+    start_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : z,
+    end_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : null,
     label: ""
   });
   state.project.references.sort(compareReferenceIds);
   render();
-  markChanged(`${id} creada en X ${col + 1}, Y ${row + 1}, Capa ${z}.`);
+  markChanged(`${id} ${referenceTypeLabel(type)} creada en X ${col + 1}, Y ${row + 1}, Z${z}.`);
 }
 
 function openEditReferenceDialog(id) {
@@ -679,7 +827,7 @@ function openEditReferenceDialog(id) {
   if (!reference) return;
   state.pendingPoint = null;
   state.editingReferenceId = id;
-  els.pointDialogTitle.textContent = `${reference.id} | X ${reference.x + 1} | Y ${reference.y + 1} | Capa ${reference.start_z}`;
+  els.pointDialogTitle.textContent = `${referenceShortLabel(reference)} | X ${reference.x + 1} | Y ${reference.y + 1} | ${referenceTypeLabel(reference.type)}`;
   els.pointLabel.value = reference.label || "";
   els.pointPersistentWrap.hidden = true;
   els.finishPointBtn.hidden = false;
@@ -703,12 +851,15 @@ function savePointDialog() {
   if (!state.pendingPoint) return;
   pushHistory();
   const z = currentLayer().z;
+  const type = els.pointPersistent.checked ? REFERENCE_TYPES.NORMAL : REFERENCE_TYPES.TEMPORAL_NEXT_LAYER;
   state.project.references.push({
     id: nextReferenceId(),
     x: state.pendingPoint.x,
     y: state.pendingPoint.y,
-    start_z: z,
-    end_z: els.pointPersistent.checked ? null : z + 1,
+    type,
+    source_z: z,
+    start_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : z,
+    end_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : null,
     label
   });
   state.project.references.sort(compareReferenceIds);
@@ -728,7 +879,11 @@ function finishReference(id) {
   if (!reference) return;
   const z = currentLayer().z;
   pushHistory();
-  reference.end_z = Math.max(reference.start_z, z);
+  if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.BACKWARD) {
+    reference.end_z = Math.min(reference.source_z, z);
+  } else {
+    reference.end_z = Math.max(reference.start_z, z);
+  }
   render();
   markChanged(`${reference.id} finalizada en Z ${reference.end_z}.`);
 }
@@ -1087,6 +1242,7 @@ function selectColor(code) {
   state.tool = "paint";
   renderPalette();
   updateButtons();
+  if (state.activePanel === "colors" && window.matchMedia("(max-width: 899px)").matches) closeContextPanel();
   setStatus(`PINTAR | ${code} ${COLOR_NAMES[code] || ""}`);
 }
 
@@ -1142,10 +1298,115 @@ function toggleEditorLock() {
   setStatus(state.editorLocked ? "NAVEGAR" : "EDITAR");
 }
 
-function setZoom(value) {
+function panelLabel(panel) {
+  const labels = {
+    layers: "Capas",
+    blocks: "Bloques",
+    references: "Referencias",
+    image: "Imagen",
+    view3d: "Vista 3D",
+    project: "Proyecto",
+    settings: "Ajustes",
+    help: "Ayuda"
+  };
+  return labels[panel] || "Panel";
+}
+
+function openContextPanel(panel) {
+  if (!panel) return;
+  state.activePanel = state.activePanel === panel ? null : panel;
+  renderContextPanel();
+}
+
+function closeContextPanel() {
+  state.activePanel = null;
+  renderContextPanel();
+}
+
+function renderContextPanel() {
+  const active = state.activePanel;
+  els.contextPanel.hidden = !active || active === "colors";
+  els.contextPanelTitle.textContent = panelLabel(active);
+  document.querySelector(".palette-rail")?.classList.toggle("mobile-open", active === "colors");
+  document.querySelectorAll(".rail-button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.panelTarget === active);
+    button.setAttribute("aria-pressed", String(button.dataset.panelTarget === active));
+  });
+  document.querySelectorAll(".context-section").forEach((section) => {
+    section.hidden = section.dataset.panel !== active;
+  });
+}
+
+function setImageEditMode(enabled) {
+  state.imageEditMode = Boolean(enabled);
+  renderReference();
+  setStatus(state.imageEditMode ? "EDITAR IMAGEN" : "IMAGEN BLOQUEADA");
+}
+
+function setImageScale(scale) {
+  state.imageState.scale = clamp(scale, 0.1, 5);
+  renderReference();
+  markChanged();
+}
+
+function centerReferenceImage() {
+  const scroller = els.gridScroller;
+  const image = els.referenceImage;
+  const width = image.naturalWidth ? image.naturalWidth * state.imageState.scale : scroller.clientWidth * 0.7;
+  const height = image.naturalHeight ? image.naturalHeight * state.imageState.scale : scroller.clientHeight * 0.7;
+  state.imageState.x = Math.max(0, (scroller.scrollWidth - width) / 2);
+  state.imageState.y = Math.max(0, (scroller.scrollHeight - height) / 2);
+  renderReference();
+  markChanged();
+}
+
+function resetReferenceImage() {
+  state.imageState = {
+    x: 16,
+    y: 16,
+    scale: 1,
+    opacity: 100,
+    blockOpacity: 100
+  };
+  renderReference();
+  renderGrid();
+  markChanged("Imagen restablecida.");
+}
+
+function beginImageDrag(event) {
+  if (!state.imageEditMode || !state.referenceVisible || !state.referenceDataUrl) return;
+  event.preventDefault();
+  els.referenceView.setPointerCapture?.(event.pointerId);
+  state.imageDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    imageX: state.imageState.x,
+    imageY: state.imageState.y
+  };
+}
+
+function moveImageDrag(event) {
+  if (!state.imageDrag || state.imageDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  state.imageState.x = state.imageDrag.imageX + event.clientX - state.imageDrag.startX;
+  state.imageState.y = state.imageDrag.imageY + event.clientY - state.imageDrag.startY;
+  renderReference();
+}
+
+function endImageDrag(event) {
+  if (!state.imageDrag || state.imageDrag.pointerId !== event.pointerId) return;
+  state.imageDrag = null;
+  markChanged();
+}
+
+function setZoom(value, options = {}) {
+  if (!options.keepFitMode) state.zoomMode = "manual";
   els.gridZoom.value = String(clamp(Number(value), Number(els.gridZoom.min), Number(els.gridZoom.max)));
   renderGrid();
   renderEditorState();
+  if (options.center) centerGridInViewport();
+  else resetGridViewportMargins();
 }
 
 function zoomIn() {
@@ -1157,9 +1418,54 @@ function zoomOut() {
 }
 
 function fitZoom() {
-  const available = Math.max(160, els.gridScroller.clientWidth - 34);
-  const cell = Math.floor(available / Math.max(1, state.project.size.x));
-  setZoom(cell);
+  state.zoomMode = "fit";
+  const cell = calculateFitCellSize();
+  setZoom(cell, { keepFitMode: true, center: true });
+}
+
+function calculateFitCellSize() {
+  const columns = Math.max(1, state.project.size.x + 1);
+  const rows = Math.max(1, state.project.size.y + 1);
+  const gridPadding = 16;
+  const margin = 14;
+  const availableWidth = Math.max(1, els.gridScroller.clientWidth - gridPadding - margin * 2);
+  const availableHeight = Math.max(1, els.gridScroller.clientHeight - gridPadding - margin * 2);
+  const byWidth = Math.floor(availableWidth / columns);
+  const byHeight = Math.floor(availableHeight / rows);
+  return clamp(Math.min(byWidth, byHeight), Number(els.gridZoom.min), Number(els.gridZoom.max));
+}
+
+function centerGridInViewport() {
+  requestAnimationFrame(() => {
+    const gap = 8;
+    const gridWidth = els.grid.offsetWidth;
+    const gridHeight = els.grid.offsetHeight;
+    els.grid.style.marginLeft = `${Math.max(gap, Math.floor((els.gridScroller.clientWidth - gridWidth) / 2))}px`;
+    els.grid.style.marginTop = `${Math.max(gap, Math.floor((els.gridScroller.clientHeight - gridHeight) / 2))}px`;
+    els.grid.style.marginRight = `${gap}px`;
+    els.grid.style.marginBottom = `${gap}px`;
+    const left = Math.max(0, (els.grid.scrollWidth - els.gridScroller.clientWidth) / 2);
+    const top = Math.max(0, (els.grid.scrollHeight - els.gridScroller.clientHeight) / 2);
+    els.gridScroller.scrollLeft = left;
+    els.gridScroller.scrollTop = top;
+  });
+}
+
+function resetGridViewportMargins() {
+  els.grid.style.marginLeft = "8px";
+  els.grid.style.marginTop = "8px";
+  els.grid.style.marginRight = "8px";
+  els.grid.style.marginBottom = "8px";
+}
+
+function refitGridIfNeeded() {
+  if (state.zoomMode !== "fit") return;
+  const next = calculateFitCellSize();
+  if (String(next) !== els.gridZoom.value) {
+    setZoom(next, { keepFitMode: true, center: true });
+  } else {
+    centerGridInViewport();
+  }
 }
 
 function shouldIgnoreShortcut(event) {
@@ -1277,7 +1583,7 @@ function deleteLayer() {
   pushHistory();
   const deletedZ = currentLayer().z;
   state.project.layers.splice(state.currentLayer, 1);
-  state.project.references = state.project.references.filter((reference) => reference.start_z !== deletedZ);
+  state.project.references = state.project.references.filter((reference) => reference.source_z !== deletedZ);
   state.currentLayer = Math.max(0, state.currentLayer - 1);
   render();
   markGeometryChanged("Capa eliminada.");
@@ -1314,8 +1620,11 @@ function validateProject(project) {
     seenReferenceIds.add(reference.id);
     if (reference.x < 0 || reference.x >= project.size.x) errors.push(`${reference.id} tiene X fuera de rango.`);
     if (reference.y < 0 || reference.y >= project.size.y) errors.push(`${reference.id} tiene Y fuera de rango.`);
-    if (!validZ.has(reference.start_z)) errors.push(`${reference.id} tiene start_z invalido.`);
-    if (reference.end_z !== null && reference.end_z < reference.start_z) {
+    if (!validZ.has(reference.source_z)) errors.push(`${reference.id} tiene source_z invalido.`);
+    if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.NORMAL && !validZ.has(reference.start_z)) {
+      errors.push(`${reference.id} tiene start_z invalido.`);
+    }
+    if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.NORMAL && reference.end_z !== null && reference.end_z < reference.start_z) {
       errors.push(`${reference.id} tiene end_z menor que start_z.`);
     }
   });
@@ -1323,6 +1632,7 @@ function validateProject(project) {
 }
 
 function exportProject() {
+  syncImageStateToProject();
   const exportable = normalizeProject(state.project);
   const errors = validateProject(exportable);
   if (errors.length) {
@@ -1359,6 +1669,7 @@ function importProject(file) {
       pushHistory();
       state.project = normalized;
       state.currentLayer = 0;
+      syncImageStateFromProject();
       renderPalette();
       render();
       markChanged("Proyecto importado.");
@@ -1381,13 +1692,19 @@ function bindEvents() {
   els.sizeX.addEventListener("change", resizeProject);
   els.sizeY.addEventListener("change", resizeProject);
   els.gridZoom.addEventListener("input", () => {
+    state.zoomMode = "manual";
     renderGrid();
     renderEditorState();
+    resetGridViewportMargins();
   });
+  if (els.settingsGridZoomMirror) {
+    els.settingsGridZoomMirror.addEventListener("input", () => setZoom(Number(els.settingsGridZoomMirror.value)));
+  }
   els.zoomInBtn.addEventListener("click", zoomIn);
   els.zoomOutBtn.addEventListener("click", zoomOut);
   els.fitZoomBtn.addEventListener("click", fitZoom);
   els.editorModeBtn.addEventListener("click", toggleEditorLock);
+  els.quickEditorModeBtn.addEventListener("click", toggleEditorLock);
   els.dragPaintToggle.addEventListener("change", () => {
     state.dragPaintEnabled = els.dragPaintToggle.checked;
     renderEditorState();
@@ -1401,6 +1718,18 @@ function bindEvents() {
   document.querySelectorAll(".tool").forEach((button) => {
     button.addEventListener("click", () => {
       setTool(button.dataset.tool);
+    });
+  });
+  document.querySelectorAll(".rail-button").forEach((button) => {
+    button.addEventListener("click", () => openContextPanel(button.dataset.panelTarget));
+  });
+  els.closeContextPanelBtn.addEventListener("click", closeContextPanel);
+  document.querySelectorAll(".reference-type-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.referenceMode = normalizeReferenceType(button.dataset.referenceMode);
+      els.referenceMode.value = state.referenceMode;
+      setTool("reference");
+      updateButtons();
     });
   });
 
@@ -1421,11 +1750,13 @@ function bindEvents() {
     state.currentLayer = 0;
     state.undoStack = [];
     state.redoStack = [];
+    syncImageStateFromProject();
     renderPalette();
     render();
     markChanged("Nuevo proyecto creado.");
   });
   els.open3dBtn.addEventListener("click", open3dViewer);
+  els.quickOpen3dBtn.addEventListener("click", open3dViewer);
   els.openOrganizerBtn.addEventListener("click", openOrganizer);
   els.closeOrganizerBtn.addEventListener("click", () => els.organizerDialog.close());
   els.runOrganizerBtn.addEventListener("click", runOrganizer);
@@ -1481,10 +1812,16 @@ function bindEvents() {
     });
   });
   els.exportBtn.addEventListener("click", exportProject);
+  els.quickExportBtn.addEventListener("click", exportProject);
   els.importInput.addEventListener("change", () => {
     const file = els.importInput.files?.[0];
     if (file) importProject(file);
     els.importInput.value = "";
+  });
+  els.quickImportInput.addEventListener("change", () => {
+    const file = els.quickImportInput.files?.[0];
+    if (file) importProject(file);
+    els.quickImportInput.value = "";
   });
 
   els.referenceInput.addEventListener("change", () => {
@@ -1494,7 +1831,9 @@ function bindEvents() {
     reader.onload = () => {
       state.referenceDataUrl = String(reader.result);
       state.referenceVisible = true;
+      syncImageStateToProject();
       renderReference();
+      markChanged("Imagen de referencia cargada.");
     };
     reader.readAsDataURL(file);
     els.referenceInput.value = "";
@@ -1502,15 +1841,42 @@ function bindEvents() {
   els.toggleReferenceBtn.addEventListener("click", () => {
     state.referenceVisible = !state.referenceVisible;
     renderReference();
+    markChanged();
   });
-  els.referenceZoom.addEventListener("input", renderReference);
-  els.referenceOpacity.addEventListener("input", renderReference);
+  els.referenceZoom.addEventListener("input", () => setImageScale(Number(els.referenceZoom.value) / 100));
+  els.referenceOpacity.addEventListener("input", () => {
+    state.imageState.opacity = Number(els.referenceOpacity.value);
+    renderReference();
+    markChanged();
+  });
+  els.blockOpacity.addEventListener("input", () => {
+    state.imageState.blockOpacity = Number(els.blockOpacity.value);
+    renderGrid();
+    renderReference();
+    markChanged();
+  });
+  els.imageEditBtn.addEventListener("click", () => setImageEditMode(!state.imageEditMode));
+  els.imageScaleDownBtn.addEventListener("click", () => setImageScale(state.imageState.scale - 0.1));
+  els.imageScaleUpBtn.addEventListener("click", () => setImageScale(state.imageState.scale + 0.1));
+  els.imageCenterBtn.addEventListener("click", centerReferenceImage);
+  els.imageResetBtn.addEventListener("click", resetReferenceImage);
+  els.referenceView.addEventListener("pointerdown", beginImageDrag);
+  els.referenceView.addEventListener("pointermove", moveImageDrag);
+  els.referenceView.addEventListener("pointerup", endImageDrag);
+  els.referenceView.addEventListener("pointercancel", endImageDrag);
   els.fullscreenReferenceBtn.addEventListener("click", () => {
     if (!state.referenceDataUrl) return;
     els.referenceDialogImage.src = state.referenceDataUrl;
     els.referenceDialog.showModal();
   });
   els.closeReferenceDialog.addEventListener("click", () => els.referenceDialog.close());
+  els.referenceMode.addEventListener("change", () => {
+    state.referenceMode = normalizeReferenceType(els.referenceMode.value);
+    if (state.tool !== "reference") setTool("reference");
+    else renderEditorState();
+  });
+  els.openShortcutsBtn.addEventListener("click", () => els.shortcutsDialog.showModal());
+  els.closeShortcutsBtn.addEventListener("click", () => els.shortcutsDialog.close());
 
   els.pointForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1525,6 +1891,9 @@ function bindEvents() {
     if (state.editingReferenceId) deleteReference(state.editingReferenceId);
   });
   window.addEventListener("keydown", handleKeyboard);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.activePanel && !event.defaultPrevented) closeContextPanel();
+  });
 }
 
 function renderReference() {
@@ -1532,10 +1901,21 @@ function renderReference() {
   els.referenceTools.hidden = !hasImage;
   els.referenceView.hidden = !hasImage || !state.referenceVisible;
   els.toggleReferenceBtn.textContent = state.referenceVisible ? "Ocultar" : "Mostrar";
+  els.imageEditBtn.textContent = state.imageEditMode ? "Bloquear imagen" : "Editar imagen";
+  els.imageEditBtn.setAttribute("aria-pressed", String(state.imageEditMode));
+  els.referenceView.classList.toggle("image-editing", state.imageEditMode);
+  els.referenceView.classList.toggle("image-locked", !state.imageEditMode);
+  els.referenceOpacity.value = String(state.imageState.opacity);
+  els.blockOpacity.value = String(state.imageState.blockOpacity);
+  els.referenceZoom.value = String(Math.round(state.imageState.scale * 100));
+  els.gridScroller.classList.toggle("has-reference-image", hasImage && state.referenceVisible);
+  els.gridScroller.classList.toggle("image-edit-mode", state.imageEditMode && hasImage && state.referenceVisible);
   if (hasImage) {
     els.referenceImage.src = state.referenceDataUrl;
-    els.referenceImage.style.opacity = String(Number(els.referenceOpacity.value) / 100);
-    els.referenceView.style.setProperty("--reference-width", `${els.referenceZoom.value}%`);
+    els.referenceImage.style.opacity = String(state.imageState.opacity / 100);
+    els.referenceView.style.setProperty("--reference-x", `${state.imageState.x}px`);
+    els.referenceView.style.setProperty("--reference-y", `${state.imageState.y}px`);
+    els.referenceView.style.setProperty("--reference-scale", String(state.imageState.scale));
   }
 }
 
@@ -1547,9 +1927,22 @@ function registerServiceWorker() {
   }
 }
 
+function observeGridViewport() {
+  if (!("ResizeObserver" in window)) {
+    window.addEventListener("resize", refitGridIfNeeded);
+    return;
+  }
+  const observer = new ResizeObserver(() => {
+    refitGridIfNeeded();
+  });
+  observer.observe(els.gridScroller);
+}
+
 loadProject();
 bindEvents();
 renderPalette();
 render();
 renderReference();
+renderContextPanel();
+observeGridViewport();
 registerServiceWorker();
