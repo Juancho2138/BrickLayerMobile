@@ -46,6 +46,7 @@ node tests/pdf-utils.test.mjs
 node tests/pdf-engine.test.mjs
 node tests/pdf-3d-capture.test.mjs
 node tests/editor-ux.test.mjs
+node tests/ldr-importer.test.mjs
 ```
 
 ## Formato

@@ -1,10 +1,16 @@
-const CACHE_NAME = "bricklayer-mobile-v14";
+const CACHE_NAME = "bricklayer-mobile-v21";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./ldr-importer.js",
   "./reference-utils.js",
+  "./selection3d.js",
+  "./viewer3d-model.js",
+  "./brickai-package.js",
+  "./brickai-renderer.js",
+  "./brickai-zip.js",
   "./palette.js",
   "./viewer3d.js",
   "./organizer.js",
@@ -48,6 +54,17 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
   if (requestUrl.origin !== self.location.origin) return;
+  if (isNetworkFirstAsset(requestUrl)) {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        if (!response || !response.ok) return response;
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
   event.respondWith(
     caches.match(event.request).then((cached) => {
       return cached || fetch(event.request).then((response) => {
@@ -59,3 +76,9 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+function isNetworkFirstAsset(url) {
+  return url.pathname.endsWith("/index.html")
+    || url.pathname.endsWith("/app.js")
+    || url.pathname.endsWith("/styles.css");
+}

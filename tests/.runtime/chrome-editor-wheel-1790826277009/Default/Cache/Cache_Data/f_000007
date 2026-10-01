@@ -1,0 +1,2396 @@
+import { BRICKLAYER_COLORS, COLOR_NAMES, DEFAULT_PALETTE } from "./palette.js";
+import { REFERENCE_TYPES, isReferenceVisibleAtZ, normalizeReferenceType, referenceTypeLabel } from "./reference-utils.js";
+import { MAX_LDR_BYTES, UnsupportedLDrawPiecesError, importLdrContent, projectNameFromLdrFilename } from "./ldr-importer.js";
+import { recolorProjectVoxels } from "./selection3d.js";
+import { VIEWER3D_BACKGROUND_PRESETS, normalizeViewer3dBackground } from "./viewer3d-model.js";
+import { BRICKAI_VIEWS, createBrickAiPackage, sanitizeBrickAiFileName } from "./brickai-package.js";
+
+const STORAGE_KEY = "bricklayer-mobile-project-v1";
+const APPEARANCE_STORAGE_KEY = "bricklayer-mobile-appearance-v1";
+const VIEWER3D_MODULE_URL = "./viewer3d.js?v=recolor-v3";
+const BRICKAI_RENDERER_MODULE_URL = "./brickai-renderer.js?v=brickai-v1";
+const defaultPalette = DEFAULT_PALETTE;
+const COLOR_SHORTCUTS = new Set(BRICKLAYER_COLORS.map((color) => color.code));
+const DESKTOP_QUERY = "(min-width: 900px) and (pointer: fine)";
+const DEFAULT_INTERFACE_BACKGROUND = "#0f1117";
+const BACKGROUND_PRESETS = {
+  default: DEFAULT_INTERFACE_BACKGROUND,
+  black: "#000000",
+  gray: "#3a3f48",
+  light: "#f4f1ea"
+};
+
+const state = {
+  project: createProject(12, 12),
+  currentLayer: 0,
+  selectedColor: "A",
+  tool: "paint",
+  undoStack: [],
+  redoStack: [],
+  activePanel: null,
+  zoomMode: "manual",
+  isDrawing: false,
+  editorLocked: !window.matchMedia(DESKTOP_QUERY).matches,
+  dragPaintEnabled: window.matchMedia(DESKTOP_QUERY).matches,
+  dragStart: null,
+  lastTouched: null,
+  pendingPoint: null,
+  editingReferenceId: null,
+  referenceMode: REFERENCE_TYPES.NORMAL,
+  referenceVisible: true,
+  referenceDataUrl: "",
+  imageEditMode: false,
+  imageState: {
+    x: 16,
+    y: 16,
+    scale: 1,
+    opacity: 100,
+    blockOpacity: 100
+  },
+  imageDrag: null,
+  appearance: {
+    backgroundMode: "default",
+    customBackground: DEFAULT_INTERFACE_BACKGROUND,
+    viewerBackgroundMode: "dark",
+    customViewerBackground: VIEWER3D_BACKGROUND_PRESETS.dark
+  }
+};
+
+const els = {
+  modelName: document.getElementById("modelName"),
+  sizeX: document.getElementById("sizeX"),
+  sizeY: document.getElementById("sizeY"),
+  stats: document.getElementById("stats"),
+  palette: document.getElementById("palette"),
+  grid: document.getElementById("matrixGrid"),
+  gridScrollContent: document.getElementById("gridScrollContent"),
+  editorModeBtn: document.getElementById("editorModeBtn"),
+  quickEditorModeBtn: document.getElementById("quickEditorModeBtn"),
+  dragPaintToggle: document.getElementById("dragPaintToggle"),
+  activeToolLabel: document.getElementById("activeToolLabel"),
+  activeColorLabel: document.getElementById("activeColorLabel"),
+  activeZoomLabel: document.getElementById("activeZoomLabel"),
+  nextReferenceLabel: document.getElementById("nextReferenceLabel"),
+  currentColorSwatch: document.getElementById("currentColorSwatch"),
+  activeReferences: document.getElementById("activeReferences"),
+  layerWorkLabel: document.getElementById("layerWorkLabel"),
+  layerWorkMeta: document.getElementById("layerWorkMeta"),
+  gridScroller: document.getElementById("gridScroller"),
+  gridZoom: document.getElementById("gridZoom"),
+  zoomInBtn: document.getElementById("zoomInBtn"),
+  zoomOutBtn: document.getElementById("zoomOutBtn"),
+  fitZoomBtn: document.getElementById("fitZoomBtn"),
+  layerLabel: document.getElementById("layerLabel"),
+  status: document.getElementById("status"),
+  contextPanel: document.getElementById("contextPanel"),
+  contextPanelTitle: document.getElementById("contextPanelTitle"),
+  closeContextPanelBtn: document.getElementById("closeContextPanelBtn"),
+  settingsGridZoomMirror: document.getElementById("settingsGridZoomMirror"),
+  openShortcutsBtn: document.getElementById("openShortcutsBtn"),
+  shortcutsDialog: document.getElementById("shortcutsDialog"),
+  closeShortcutsBtn: document.getElementById("closeShortcutsBtn"),
+  newProjectBtn: document.getElementById("newProjectBtn"),
+  prevLayerBtn: document.getElementById("prevLayerBtn"),
+  nextLayerBtn: document.getElementById("nextLayerBtn"),
+  newLayerBtn: document.getElementById("newLayerBtn"),
+  copyPrevLayerBtn: document.getElementById("copyPrevLayerBtn"),
+  duplicateLayerBtn: document.getElementById("duplicateLayerBtn"),
+  deleteLayerBtn: document.getElementById("deleteLayerBtn"),
+  clearLayerBtn: document.getElementById("clearLayerBtn"),
+  undoBtn: document.getElementById("undoBtn"),
+  redoBtn: document.getElementById("redoBtn"),
+  exportBtn: document.getElementById("exportBtn"),
+  exportBrickAiBtn: document.getElementById("exportBrickAiBtn"),
+  quickExportBtn: document.getElementById("quickExportBtn"),
+  open3dBtn: document.getElementById("open3dBtn"),
+  quickOpen3dBtn: document.getElementById("quickOpen3dBtn"),
+  openOrganizerBtn: document.getElementById("openOrganizerBtn"),
+  showOrganizationToggle: document.getElementById("showOrganizationToggle"),
+  organizationOutdated: document.getElementById("organizationOutdated"),
+  importInput: document.getElementById("importInput"),
+  quickImportInput: document.getElementById("quickImportInput"),
+  ldrImportInput: document.getElementById("ldrImportInput"),
+  referenceInput: document.getElementById("referenceInput"),
+  referenceTools: document.getElementById("referenceTools"),
+  referenceView: document.getElementById("referenceView"),
+  referenceImage: document.getElementById("referenceImage"),
+  referenceZoom: document.getElementById("referenceZoom"),
+  referenceOpacity: document.getElementById("referenceOpacity"),
+  blockOpacity: document.getElementById("blockOpacity"),
+  imageEditBtn: document.getElementById("imageEditBtn"),
+  imageScaleDownBtn: document.getElementById("imageScaleDownBtn"),
+  imageScaleUpBtn: document.getElementById("imageScaleUpBtn"),
+  imageCenterBtn: document.getElementById("imageCenterBtn"),
+  imageResetBtn: document.getElementById("imageResetBtn"),
+  toggleReferenceBtn: document.getElementById("toggleReferenceBtn"),
+  fullscreenReferenceBtn: document.getElementById("fullscreenReferenceBtn"),
+  referenceMode: document.getElementById("referenceMode"),
+  referenceDialog: document.getElementById("referenceDialog"),
+  referenceDialogImage: document.getElementById("referenceDialogImage"),
+  closeReferenceDialog: document.getElementById("closeReferenceDialog"),
+  pointDialog: document.getElementById("pointDialog"),
+  pointForm: document.getElementById("pointForm"),
+  pointDialogTitle: document.getElementById("pointDialogTitle"),
+  pointLabel: document.getElementById("pointLabel"),
+  pointPersistent: document.getElementById("pointPersistent"),
+  pointPersistentWrap: document.getElementById("pointPersistentWrap"),
+  cancelPointBtn: document.getElementById("cancelPointBtn"),
+  finishPointBtn: document.getElementById("finishPointBtn"),
+  deletePointBtn: document.getElementById("deletePointBtn"),
+  viewer3dDialog: document.getElementById("viewer3dDialog"),
+  viewer3dCanvasWrap: document.getElementById("viewer3dCanvasWrap"),
+  viewer3dInfo: document.getElementById("viewer3dInfo"),
+  viewer3dLayerSelect: document.getElementById("viewer3dLayerSelect"),
+  viewer3dAllLayers: document.getElementById("viewer3dAllLayers"),
+  viewer3dRecolorToggle: document.getElementById("viewer3dRecolorToggle"),
+  viewer3dRecolorPanel: document.getElementById("viewer3dRecolorPanel"),
+  viewer3dModeConnected: document.getElementById("viewer3dModeConnected"),
+  viewer3dModeAllColor: document.getElementById("viewer3dModeAllColor"),
+  viewer3dActionReplace: document.getElementById("viewer3dActionReplace"),
+  viewer3dActionAdd: document.getElementById("viewer3dActionAdd"),
+  viewer3dActionRemove: document.getElementById("viewer3dActionRemove"),
+  viewer3dSelectionCount: document.getElementById("viewer3dSelectionCount"),
+  viewer3dSelectionColor: document.getElementById("viewer3dSelectionColor"),
+  viewer3dColorPalette: document.getElementById("viewer3dColorPalette"),
+  viewer3dColorSwatch: document.getElementById("viewer3dColorSwatch"),
+  viewer3dColorPopover: document.getElementById("viewer3dColorPopover"),
+  viewer3dApplyColor: document.getElementById("viewer3dApplyColor"),
+  viewer3dClearSelection: document.getElementById("viewer3dClearSelection"),
+  viewer3dExitRecolor: document.getElementById("viewer3dExitRecolor"),
+  close3dBtn: document.getElementById("close3dBtn"),
+  recenter3dBtn: document.getElementById("recenter3dBtn"),
+  organizerDialog: document.getElementById("organizerDialog"),
+  closeOrganizerBtn: document.getElementById("closeOrganizerBtn"),
+  organizerMaxLength: document.getElementById("organizerMaxLength"),
+  organizerPriority: document.getElementById("organizerPriority"),
+  runOrganizerBtn: document.getElementById("runOrganizerBtn"),
+  organizerSummary: document.getElementById("organizerSummary"),
+  organizerInventory: document.getElementById("organizerInventory"),
+  organizerLayerStats: document.getElementById("organizerLayerStats"),
+  organizerWarnings: document.getElementById("organizerWarnings"),
+  openPdfBtn: document.getElementById("openPdfBtn"),
+  pdfDialog: document.getElementById("pdfDialog"),
+  closePdfBtn: document.getElementById("closePdfBtn"),
+  pdfProfile: document.getElementById("pdfProfile"),
+  pdfAllLayers: document.getElementById("pdfAllLayers"),
+  pdfFromZ: document.getElementById("pdfFromZ"),
+  pdfToZ: document.getElementById("pdfToZ"),
+  pdfShowLayerNumber: document.getElementById("pdfShowLayerNumber"),
+  pdfShowMatrix: document.getElementById("pdfShowMatrix"),
+  pdfShowColors: document.getElementById("pdfShowColors"),
+  pdfShowPieces: document.getElementById("pdfShowPieces"),
+  pdfShowReferences: document.getElementById("pdfShowReferences"),
+  pdfShowLayerPieces: document.getElementById("pdfShowLayerPieces"),
+  pdfShowInventory: document.getElementById("pdfShowInventory"),
+  pdfShow3d: document.getElementById("pdfShow3d"),
+  pdfShowStats: document.getElementById("pdfShowStats"),
+  pdfShowPieceIds: document.getElementById("pdfShowPieceIds"),
+  pdf3dFrequency: document.getElementById("pdf3dFrequency"),
+  pdfOrientation: document.getElementById("pdfOrientation"),
+  pdfOutdatedWarning: document.getElementById("pdfOutdatedWarning"),
+  pdfReorganizeFirstBtn: document.getElementById("pdfReorganizeFirstBtn"),
+  pdfWithoutOrganizationBtn: document.getElementById("pdfWithoutOrganizationBtn"),
+  pdfSummary: document.getElementById("pdfSummary"),
+  pdfProgress: document.getElementById("pdfProgress"),
+  pdfProgressText: document.getElementById("pdfProgressText"),
+  generatePdfBtn: document.getElementById("generatePdfBtn"),
+  downloadPdfBtn: document.getElementById("downloadPdfBtn"),
+  sharePdfBtn: document.getElementById("sharePdfBtn"),
+  customBackgroundColor: document.getElementById("customBackgroundColor"),
+  resetBackgroundBtn: document.getElementById("resetBackgroundBtn"),
+  backgroundPresetBtns: document.querySelectorAll("[data-app-background]"),
+  customViewerBackgroundColor: document.getElementById("customViewerBackgroundColor"),
+  resetViewerBackgroundBtn: document.getElementById("resetViewerBackgroundBtn"),
+  viewerBackgroundPresetBtns: document.querySelectorAll("[data-viewer-background]")
+};
+
+function createProject(x, y) {
+  return {
+    format: "bricklayers-v1",
+    name: "Nuevo modelo",
+    size: { x, y },
+    palette: { ...defaultPalette },
+    revision: 0,
+    references: [],
+    reference_image: normalizeReferenceImage(null),
+    construction_layout: null,
+    layers: [{ z: 0, matrix: createEmptyMatrix(x, y) }]
+  };
+}
+
+function createEmptyMatrix(x, y) {
+  return Array.from({ length: y }, () => ".".repeat(x));
+}
+
+function cloneMatrix(matrix) {
+  return matrix.slice();
+}
+
+function currentLayer() {
+  return state.project.layers[state.currentLayer];
+}
+
+function matrixToRows(matrix) {
+  return matrix.map((row) => Array.isArray(row) ? row.join("") : String(row));
+}
+
+function normalizeProject(project) {
+  const x = Number(project.size?.x) || 12;
+  const y = Number(project.size?.y) || 12;
+  const palette = project.palette && typeof project.palette === "object" ? project.palette : defaultPalette;
+  const layers = Array.isArray(project.layers) && project.layers.length ? project.layers : [{ z: 0, matrix: [] }];
+  const normalizedLayers = layers
+    .map((layer, index) => ({
+      z: Number.isInteger(layer.z) ? layer.z : index,
+      matrix: normalizeMatrix(matrixToRows(layer.matrix || []), x, y)
+    }))
+    .sort((a, b) => a.z - b.z);
+
+  return {
+    format: "bricklayers-v1",
+    name: project.name || "Nuevo modelo",
+    size: { x, y },
+    palette: { ...defaultPalette, ...palette },
+    revision: Number.isInteger(project.revision) ? project.revision : 0,
+    references: normalizeReferences(project, normalizedLayers, x, y),
+    reference_image: normalizeReferenceImage(project.reference_image),
+    construction_layout: normalizeConstructionLayout(project.construction_layout, Number.isInteger(project.revision) ? project.revision : 0),
+    layers: normalizedLayers
+  };
+}
+
+function normalizeReferenceImage(image) {
+  const source = image && typeof image === "object" ? image : {};
+  return {
+    data_url: typeof source.data_url === "string" ? source.data_url : "",
+    visible: source.visible !== false,
+    x: Number.isFinite(source.x) ? source.x : 16,
+    y: Number.isFinite(source.y) ? source.y : 16,
+    scale: Number.isFinite(source.scale) ? clamp(source.scale, 0.1, 5) : 1,
+    opacity: Number.isFinite(source.opacity) ? clamp(source.opacity, 0, 100) : 100,
+    block_opacity: Number.isFinite(source.block_opacity) ? clamp(source.block_opacity, 0, 100) : 100
+  };
+}
+
+function normalizeConstructionLayout(layout, revision) {
+  if (!layout || typeof layout !== "object" || !Array.isArray(layout.pieces)) return null;
+  const generatedFromRevision = Number.isInteger(layout.generated_from_revision) ? layout.generated_from_revision : 0;
+  return {
+    version: Number(layout.version) || 1,
+    max_piece_length: Number(layout.max_piece_length) || 3,
+    priority: layout.priority || "balanced",
+    generated_from_revision: generatedFromRevision,
+    outdated: Boolean(layout.outdated) || generatedFromRevision !== revision,
+    pieces: layout.pieces,
+    inventory: layout.inventory || {},
+    layer_stats: Array.isArray(layout.layer_stats) ? layout.layer_stats : [],
+    stability: layout.stability || { score: 0, warnings: [] },
+    totals: layout.totals || { cells: 0, physical_pieces: layout.pieces.length }
+  };
+}
+
+function normalizeReferences(project, layers, x, y) {
+  const normalized = [];
+  const sourceReferences = Array.isArray(project.references) ? project.references : [];
+  sourceReferences.forEach((reference) => addNormalizedReference(normalized, reference, x, y));
+
+  if (Array.isArray(project.layers)) {
+    project.layers.forEach((layer, layerIndex) => {
+      if (!Array.isArray(layer.references)) return;
+      const z = Number.isInteger(layer.z) ? layer.z : layerIndex;
+      layer.references.forEach((reference) => {
+        addNormalizedReference(normalized, {
+          ...reference,
+          start_z: Number.isInteger(reference.start_z) ? reference.start_z : z,
+          end_z: reference.persistent === false ? z + 1 : reference.end_z
+        }, x, y);
+      });
+    });
+  }
+
+  return normalized.sort(compareReferenceIds);
+}
+
+function addNormalizedReference(list, reference, x, y) {
+  const id = typeof reference.id === "string" && reference.id.trim() ? reference.id.trim() : nextReferenceId(list);
+  const type = normalizeReferenceType(reference.type);
+  const sourceZ = Number.isInteger(reference.source_z)
+    ? reference.source_z
+    : Number.isInteger(reference.start_z)
+      ? reference.start_z
+      : 0;
+  let startZ = Number.isInteger(reference.start_z) ? reference.start_z : sourceZ;
+  let endZ = Number.isInteger(reference.end_z) ? reference.end_z : null;
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) {
+    startZ = sourceZ + 1;
+    endZ = sourceZ + 1;
+  } else if (type === REFERENCE_TYPES.NORMAL && endZ !== null && endZ < startZ) {
+    endZ = null;
+  }
+  const normalized = {
+    id,
+    x: Number.isInteger(reference.x) ? reference.x : 0,
+    y: Number.isInteger(reference.y) ? reference.y : 0,
+    type,
+    source_z: sourceZ,
+    start_z: startZ,
+    end_z: endZ,
+    label: typeof reference.label === "string" ? reference.label : ""
+  };
+  list.push(normalized);
+}
+
+function normalizeMatrix(rows, x, y) {
+  const allowed = new Set([".", ...Object.keys(defaultPalette)]);
+  return Array.from({ length: y }, (_, rowIndex) => {
+    const source = rows[rowIndex] || "";
+    let row = "";
+    for (let col = 0; col < x; col += 1) {
+      const char = source[col] || ".";
+      row += allowed.has(char) ? char : ".";
+    }
+    return row;
+  });
+}
+
+function setCell(matrix, x, y, value) {
+  const row = matrix[y];
+  matrix[y] = row.slice(0, x) + value + row.slice(x + 1);
+}
+
+function getCell(matrix, x, y) {
+  return matrix[y][x];
+}
+
+function pushHistory() {
+  state.undoStack.push(JSON.stringify(state.project));
+  if (state.undoStack.length > 60) state.undoStack.shift();
+  state.redoStack = [];
+}
+
+function restoreProject(serialized) {
+  state.project = normalizeProject(JSON.parse(serialized));
+  state.currentLayer = Math.min(state.currentLayer, state.project.layers.length - 1);
+  syncImageStateFromProject();
+  renderPalette();
+  render();
+  refitGridIfNeeded();
+  saveProject();
+}
+
+function nextReferenceId(source = state.project.references) {
+  const ids = source.map((reference) => reference.id);
+  let next = 1;
+  while (ids.includes(`R${next}`)) next += 1;
+  return `R${next}`;
+}
+
+function compareReferenceIds(a, b) {
+  const aNum = Number(String(a.id).replace(/^R/i, ""));
+  const bNum = Number(String(b.id).replace(/^R/i, ""));
+  if (Number.isFinite(aNum) && Number.isFinite(bNum)) return aNum - bNum;
+  return String(a.id).localeCompare(String(b.id));
+}
+
+function markChanged(message) {
+  saveProject();
+  renderLayerLabel();
+  renderStats();
+  updateButtons();
+  if (message) setStatus(message);
+}
+
+function markGeometryChanged(message) {
+  const shouldRefreshGrid = Boolean(state.project.construction_layout && !state.project.construction_layout.outdated && els.showOrganizationToggle.checked);
+  state.project.revision = (state.project.revision || 0) + 1;
+  if (state.project.construction_layout) state.project.construction_layout.outdated = true;
+  if (shouldRefreshGrid) renderGrid();
+  markChanged(message);
+}
+
+function saveProject() {
+  syncImageStateToProject();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.project));
+}
+
+function loadProject() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (!saved) return;
+  try {
+    state.project = normalizeProject(JSON.parse(saved));
+    state.currentLayer = 0;
+    syncImageStateFromProject();
+  } catch {
+    setStatus("No se pudo recuperar el proyecto guardado.");
+  }
+}
+
+function syncImageStateFromProject() {
+  const image = normalizeReferenceImage(state.project.reference_image);
+  state.project.reference_image = image;
+  state.referenceDataUrl = image.data_url;
+  state.referenceVisible = image.visible;
+  state.imageState = {
+    x: image.x,
+    y: image.y,
+    scale: image.scale,
+    opacity: image.opacity,
+    blockOpacity: image.block_opacity
+  };
+}
+
+function syncImageStateToProject() {
+  state.project.reference_image = {
+    data_url: state.referenceDataUrl,
+    visible: state.referenceVisible,
+    x: state.imageState.x,
+    y: state.imageState.y,
+    scale: state.imageState.scale,
+    opacity: state.imageState.opacity,
+    block_opacity: state.imageState.blockOpacity
+  };
+}
+
+function render() {
+  els.modelName.value = state.project.name;
+  els.sizeX.value = state.project.size.x;
+  els.sizeY.value = state.project.size.y;
+  renderLayerLabel();
+  renderEditorState();
+  renderGrid();
+  renderActiveReferences();
+  renderStats();
+  updateButtons();
+}
+
+function renderLayerLabel() {
+  els.layerLabel.textContent = `Capa ${state.currentLayer + 1}/${state.project.layers.length}`;
+  els.layerWorkLabel.textContent = `Capa Z: ${currentLayer().z}`;
+  els.layerWorkMeta.textContent = `${state.currentLayer + 1} de ${state.project.layers.length}  Bloques: ${countLayerBlocks(currentLayer())}`;
+}
+
+function renderEditorState() {
+  const colorName = COLOR_NAMES[state.selectedColor] || "";
+  const toolName = toolLabel(state.tool);
+  const modeText = state.editorLocked ? "NAVEGAR" : "EDITAR";
+  const quickModeLabel = state.editorLocked ? "Edicion bloqueada tocar para editar" : "Edicion activa tocar para bloquear";
+  els.editorModeBtn.textContent = state.editorLocked ? "NAVEGAR" : "EDITAR";
+  els.editorModeBtn.classList.toggle("locked", state.editorLocked);
+  els.editorModeBtn.setAttribute("aria-pressed", String(!state.editorLocked));
+  els.quickEditorModeBtn.classList.toggle("locked", state.editorLocked);
+  els.quickEditorModeBtn.setAttribute("aria-pressed", String(!state.editorLocked));
+  els.quickEditorModeBtn.setAttribute("aria-label", quickModeLabel);
+  els.quickEditorModeBtn.title = quickModeLabel;
+  els.gridScroller.classList.toggle("editor-locked", state.editorLocked);
+  els.gridScroller.classList.toggle("drag-disabled", !state.dragPaintEnabled);
+  els.activeToolLabel.textContent = `${modeText} | ${toolName}`;
+  els.activeColorLabel.textContent = `${state.selectedColor} ${colorName}`;
+  els.activeZoomLabel.textContent = `${els.gridZoom.value}px`;
+  els.nextReferenceLabel.textContent = state.tool === "reference" ? `Siguiente: ${nextReferenceId()}` : "";
+  els.dragPaintToggle.checked = state.dragPaintEnabled;
+  if (els.referenceMode) els.referenceMode.value = state.referenceMode;
+  if (els.settingsGridZoomMirror) els.settingsGridZoomMirror.value = els.gridZoom.value;
+}
+
+function toolLabel(tool) {
+  const labels = {
+    paint: "Pintar",
+    erase: "Borrar",
+    fill: "Rellenar",
+    select: "Seleccionar",
+    template: "Plantilla",
+    reference: "Referencia"
+  };
+  return labels[tool] || tool;
+}
+
+function renderStats() {
+  const occupied = state.project.layers.reduce((sum, layer) => {
+    return sum + layer.matrix.join("").split("").filter((cell) => cell !== ".").length;
+  }, 0);
+  const zSize = state.project.layers.length;
+  els.stats.innerHTML = `
+    <span>Total de capas: ${zSize}</span>
+    <span>Total de celdas ocupadas: ${occupied}</span>
+    <span>Dimensiones: ${state.project.size.x} x ${state.project.size.y} x ${zSize}</span>
+  `;
+  els.organizationOutdated.hidden = !state.project.construction_layout?.outdated;
+}
+
+function countLayerBlocks(layer) {
+  return layer.matrix.join("").split("").filter((cell) => cell !== ".").length;
+}
+
+function renderPalette() {
+  els.palette.innerHTML = "";
+  const selectedHex = state.project.palette[state.selectedColor] || defaultPalette[state.selectedColor];
+  els.currentColorSwatch.textContent = state.selectedColor;
+  els.currentColorSwatch.style.background = selectedHex;
+  els.currentColorSwatch.style.color = contrastText(selectedHex);
+  BRICKLAYER_COLORS.forEach(({ code }) => {
+    const color = state.project.palette[code] || defaultPalette[code];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `palette-button${code === state.selectedColor ? " active" : ""}`;
+    button.dataset.color = code;
+    button.title = `${code} ${COLOR_NAMES[code] || ""}`;
+    button.style.setProperty("--swatch-color", color);
+    button.style.color = contrastText(color);
+    button.textContent = code;
+    button.setAttribute("aria-label", `${code} ${COLOR_NAMES[code] || ""}`);
+    button.addEventListener("click", () => selectColor(code));
+    els.palette.appendChild(button);
+  });
+}
+
+function contrastText(hex) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!match) return "#ffffff";
+  const value = match[1];
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 >= 145 ? "#111111" : "#ffffff";
+}
+
+function normalizeHexColor(value, fallback = DEFAULT_INTERFACE_BACKGROUND) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(value || ""));
+  return match ? `#${match[1].toLowerCase()}` : fallback;
+}
+
+function hexToRgb(hex) {
+  const normalized = normalizeHexColor(hex).slice(1);
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16)
+  };
+}
+
+function rgbToHex({ r, g, b }) {
+  return `#${[r, g, b].map((channel) => clamp(Math.round(channel), 0, 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixHex(a, b, amount) {
+  const from = hexToRgb(a);
+  const to = hexToRgb(b);
+  return rgbToHex({
+    r: from.r + (to.r - from.r) * amount,
+    g: from.g + (to.g - from.g) * amount,
+    b: from.b + (to.b - from.b) * amount
+  });
+}
+
+function relativeLuminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const linear = [r, g, b].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+}
+
+function currentInterfaceBackground() {
+  if (state.appearance.backgroundMode === "custom") {
+    return normalizeHexColor(state.appearance.customBackground);
+  }
+  return BACKGROUND_PRESETS[state.appearance.backgroundMode] || DEFAULT_INTERFACE_BACKGROUND;
+}
+
+function currentViewerBackground() {
+  return normalizeViewer3dBackground(state.appearance.viewerBackgroundMode, state.appearance.customViewerBackground);
+}
+
+function themeFromBackground(background) {
+  const bg = normalizeHexColor(background);
+  const rgb = hexToRgb(bg);
+  const isLight = relativeLuminance(bg) > 0.48;
+  if (isLight) {
+    return {
+      colorScheme: "light",
+      appBg: bg,
+      panelBg: mixHex(bg, "#000000", 0.08),
+      panelSoftBg: mixHex(bg, "#000000", 0.14),
+      editorBg: mixHex(bg, "#000000", 0.05),
+      controlBg: mixHex(bg, "#000000", 0.03),
+      surfaceBg: mixHex(bg, "#000000", 0.1),
+      textPrimary: "#12151b",
+      textSecondary: "#4f5968",
+      borderColor: mixHex(bg, "#000000", 0.26),
+      topbarBg: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.96)`,
+      overlayShadow: "0 18px 42px rgba(20, 24, 32, 0.2)"
+    };
+  }
+  return {
+    colorScheme: "dark",
+    appBg: bg,
+    panelBg: mixHex(bg, "#ffffff", 0.07),
+    panelSoftBg: mixHex(bg, "#ffffff", 0.13),
+    editorBg: mixHex(bg, "#000000", 0.28),
+    controlBg: mixHex(bg, "#000000", 0.18),
+    surfaceBg: mixHex(bg, "#ffffff", 0.04),
+    textPrimary: "#f4f7fb",
+    textSecondary: "#aab3c2",
+    borderColor: mixHex(bg, "#ffffff", 0.22),
+    topbarBg: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.96)`,
+    overlayShadow: "0 18px 42px rgba(0, 0, 0, 0.42)"
+  };
+}
+
+function applyAppearance() {
+  const background = currentInterfaceBackground();
+  const theme = themeFromBackground(background);
+  const root = document.documentElement;
+  root.style.colorScheme = theme.colorScheme;
+  root.style.setProperty("--app-bg", theme.appBg);
+  root.style.setProperty("--panel-bg", theme.panelBg);
+  root.style.setProperty("--panel-soft-bg", theme.panelSoftBg);
+  root.style.setProperty("--editor-bg", theme.editorBg);
+  root.style.setProperty("--control-bg", theme.controlBg);
+  root.style.setProperty("--surface-bg", theme.surfaceBg);
+  root.style.setProperty("--text-primary", theme.textPrimary);
+  root.style.setProperty("--text-secondary", theme.textSecondary);
+  root.style.setProperty("--border-color", theme.borderColor);
+  root.style.setProperty("--bg", theme.appBg);
+  root.style.setProperty("--panel", theme.panelBg);
+  root.style.setProperty("--panel-soft", theme.panelSoftBg);
+  root.style.setProperty("--text", theme.textPrimary);
+  root.style.setProperty("--muted", theme.textSecondary);
+  root.style.setProperty("--line", theme.borderColor);
+  root.style.setProperty("--topbar-bg", theme.topbarBg);
+  root.style.setProperty("--overlay-shadow", theme.overlayShadow);
+  root.style.setProperty("--viewer3d-bg", currentViewerBackground());
+  updateAppearanceControls();
+}
+
+function updateAppearanceControls() {
+  if (els.customBackgroundColor) els.customBackgroundColor.value = normalizeHexColor(state.appearance.customBackground);
+  els.backgroundPresetBtns?.forEach((button) => {
+    button.classList.toggle("active", button.dataset.appBackground === state.appearance.backgroundMode);
+  });
+  if (els.customViewerBackgroundColor) els.customViewerBackgroundColor.value = normalizeHexColor(state.appearance.customViewerBackground, VIEWER3D_BACKGROUND_PRESETS.dark);
+  els.viewerBackgroundPresetBtns?.forEach((button) => {
+    button.classList.toggle("active", button.dataset.viewerBackground === state.appearance.viewerBackgroundMode);
+  });
+}
+
+function saveAppearance() {
+  localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(state.appearance));
+}
+
+function loadAppearance() {
+  const saved = localStorage.getItem(APPEARANCE_STORAGE_KEY);
+  if (!saved) {
+    applyAppearance();
+    return;
+  }
+  try {
+    const parsed = JSON.parse(saved);
+    const mode = parsed.backgroundMode === "custom" || Object.prototype.hasOwnProperty.call(BACKGROUND_PRESETS, parsed.backgroundMode) ? parsed.backgroundMode : "default";
+    state.appearance = {
+      backgroundMode: mode,
+      customBackground: normalizeHexColor(parsed.customBackground, DEFAULT_INTERFACE_BACKGROUND),
+      viewerBackgroundMode: parsed.viewerBackgroundMode === "custom" || Object.prototype.hasOwnProperty.call(VIEWER3D_BACKGROUND_PRESETS, parsed.viewerBackgroundMode) ? parsed.viewerBackgroundMode : "dark",
+      customViewerBackground: normalizeHexColor(parsed.customViewerBackground, VIEWER3D_BACKGROUND_PRESETS.dark)
+    };
+  } catch {
+    state.appearance = {
+      backgroundMode: "default",
+      customBackground: DEFAULT_INTERFACE_BACKGROUND,
+      viewerBackgroundMode: "dark",
+      customViewerBackground: VIEWER3D_BACKGROUND_PRESETS.dark
+    };
+  }
+  applyAppearance();
+}
+
+function setInterfaceBackground(mode, color) {
+  state.appearance.backgroundMode = mode;
+  if (color) state.appearance.customBackground = normalizeHexColor(color);
+  applyAppearance();
+  saveAppearance();
+  refitGridIfNeeded();
+}
+
+function resetInterfaceBackground() {
+  state.appearance = {
+    backgroundMode: "default",
+    customBackground: DEFAULT_INTERFACE_BACKGROUND,
+    viewerBackgroundMode: state.appearance.viewerBackgroundMode,
+    customViewerBackground: state.appearance.customViewerBackground
+  };
+  applyAppearance();
+  saveAppearance();
+  refitGridIfNeeded();
+}
+
+function setViewerBackground(mode, color) {
+  state.appearance.viewerBackgroundMode = mode;
+  if (color) state.appearance.customViewerBackground = normalizeHexColor(color, VIEWER3D_BACKGROUND_PRESETS.dark);
+  applyAppearance();
+  saveAppearance();
+  refreshOpen3dViewer();
+}
+
+function resetViewerBackground() {
+  state.appearance.viewerBackgroundMode = "dark";
+  state.appearance.customViewerBackground = VIEWER3D_BACKGROUND_PRESETS.dark;
+  applyAppearance();
+  saveAppearance();
+  refreshOpen3dViewer();
+}
+
+function renderGrid() {
+  const { x, y } = state.project.size;
+  const activeReferences = activeReferencesForCurrentLayer();
+  const organizationMap = organizationPieceMapForCurrentLayer();
+  els.grid.style.setProperty("--x", x);
+  els.grid.style.setProperty("--y", y);
+  els.grid.style.setProperty("--cell", `${els.gridZoom.value}px`);
+  els.grid.style.setProperty("--block-opacity", String(state.imageState.blockOpacity / 100));
+  els.grid.innerHTML = "";
+
+  const corner = document.createElement("div");
+  corner.className = "axis corner";
+  els.grid.appendChild(corner);
+
+  for (let col = 0; col < x; col += 1) {
+    const axis = document.createElement("div");
+    axis.className = "axis";
+    axis.textContent = col + 1;
+    els.grid.appendChild(axis);
+  }
+
+  const matrix = currentLayer().matrix;
+  for (let row = 0; row < y; row += 1) {
+    const axis = document.createElement("div");
+    axis.className = "axis";
+    axis.textContent = row + 1;
+    els.grid.appendChild(axis);
+
+    for (let col = 0; col < x; col += 1) {
+      const code = getCell(matrix, col, row);
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = `cell${code !== "." ? " occupied" : ""}${organizationEdgeClasses(organizationMap, col, row)}`;
+      cell.dataset.x = col;
+      cell.dataset.y = row;
+      cell.ariaLabel = `X ${col + 1}, Y ${row + 1}`;
+      cell.style.background = code === "." ? "" : state.project.palette[code];
+      const referencesHere = activeReferences.filter((reference) => reference.x === col && reference.y === row);
+      if (referencesHere.length) {
+        cell.ariaLabel += `, Referencias ${referencesHere.map((reference) => reference.id).join(", ")}, Capa ${currentLayer().z}`;
+      }
+      referencesHere.forEach((reference) => {
+        const marker = document.createElement("span");
+        marker.className = `reference-marker ${referenceClass(reference)}`;
+        const label = document.createElement("span");
+        label.textContent = referenceShortLabel(reference);
+        marker.appendChild(label);
+        cell.appendChild(marker);
+      });
+      els.grid.appendChild(cell);
+    }
+  }
+  const gridStyle = getComputedStyle(els.grid);
+  const contentWidth = els.grid.offsetWidth + parseFloat(gridStyle.marginLeft || 0) + parseFloat(gridStyle.marginRight || 0);
+  const contentHeight = els.grid.offsetHeight + parseFloat(gridStyle.marginTop || 0) + parseFloat(gridStyle.marginBottom || 0);
+  els.gridScrollContent.style.width = `${Math.ceil(contentWidth)}px`;
+  els.gridScrollContent.style.height = `${Math.ceil(contentHeight)}px`;
+}
+
+function organizationPieceMapForCurrentLayer() {
+  if (!els.showOrganizationToggle.checked || state.project.construction_layout?.outdated) return null;
+  const layout = state.project.construction_layout;
+  if (!layout?.pieces?.length) return null;
+  const z = currentLayer().z;
+  const map = new Map();
+  layout.pieces
+    .filter((piece) => piece.z === z)
+    .forEach((piece) => {
+      piece.cells.forEach(([x, y]) => map.set(`${x},${y}`, piece.id));
+    });
+  return map;
+}
+
+function organizationEdgeClasses(map, col, row) {
+  if (!map) return "";
+  const id = map.get(`${col},${row}`);
+  if (!id) return "";
+  const classes = [];
+  if (map.get(`${col},${row - 1}`) !== id) classes.push("organization-edge-top");
+  if (map.get(`${col + 1},${row}`) !== id) classes.push("organization-edge-right");
+  if (map.get(`${col},${row + 1}`) !== id) classes.push("organization-edge-bottom");
+  if (map.get(`${col - 1},${row}`) !== id) classes.push("organization-edge-left");
+  return ` ${classes.join(" ")}`;
+}
+
+function activeReferencesForCurrentLayer() {
+  const z = currentLayer().z;
+  return state.project.references
+    .filter((reference) => isReferenceVisibleAtZ(reference, z))
+    .sort(compareReferenceIds);
+}
+
+function renderActiveReferences() {
+  const references = activeReferencesForCurrentLayer();
+  els.activeReferences.innerHTML = "";
+  if (!references.length) {
+    const empty = document.createElement("div");
+    empty.className = "reference-list-empty";
+    empty.textContent = "Sin referencias activas";
+    els.activeReferences.appendChild(empty);
+    return;
+  }
+
+  references.forEach((reference) => {
+    const item = document.createElement("div");
+    item.className = "reference-item";
+
+    const name = document.createElement("div");
+    name.className = "reference-name";
+    const title = document.createElement("span");
+    title.textContent = `${referenceShortLabel(reference)} ${reference.label || ""}`.trim();
+    const position = document.createElement("small");
+    position.textContent = referenceMeta(reference);
+    name.append(title, position);
+
+    const locate = document.createElement("button");
+    locate.type = "button";
+    locate.textContent = "Localizar";
+    locate.addEventListener("click", () => locateReference(reference));
+
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Editar";
+    edit.addEventListener("click", () => openEditReferenceDialog(reference.id));
+
+    const finish = document.createElement("button");
+    finish.type = "button";
+    finish.textContent = "Finalizar";
+    finish.addEventListener("click", () => finishReference(reference.id));
+
+    finish.hidden = normalizeReferenceType(reference.type) === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER;
+
+    item.append(name, locate, edit, finish);
+    els.activeReferences.appendChild(item);
+  });
+}
+
+function referenceClass(reference) {
+  const type = normalizeReferenceType(reference.type);
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) return "reference-marker-temporary";
+  if (type === REFERENCE_TYPES.BACKWARD) return "reference-marker-backward";
+  return "reference-marker-normal";
+}
+
+function referenceShortLabel(reference) {
+  if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.BACKWARD) return `REF Z${reference.source_z}`;
+  return reference.id;
+}
+
+function referenceMeta(reference) {
+  const type = normalizeReferenceType(reference.type);
+  if (type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER) {
+    return `X ${reference.x + 1}, Y ${reference.y + 1}, origen Z${reference.source_z}, visible Z${reference.source_z + 1}`;
+  }
+  if (type === REFERENCE_TYPES.BACKWARD) {
+    const end = reference.end_z === null ? "Z0..." : `Z${reference.end_z}`;
+    return `X ${reference.x + 1}, Y ${reference.y + 1}, desde Z${reference.source_z} hacia ${end}`;
+  }
+  return `X ${reference.x + 1}, Y ${reference.y + 1}, desde Z${reference.start_z}`;
+}
+
+function updateButtons() {
+  document.querySelectorAll(".tool").forEach((button) => {
+    button.classList.toggle("active", button.dataset.tool === state.tool);
+  });
+  document.querySelectorAll(".reference-type-btn").forEach((button) => {
+    button.classList.toggle("active", normalizeReferenceType(button.dataset.referenceMode) === state.referenceMode);
+  });
+  els.prevLayerBtn.disabled = state.currentLayer === 0;
+  els.nextLayerBtn.disabled = state.currentLayer >= state.project.layers.length - 1;
+  els.copyPrevLayerBtn.disabled = !state.project.layers.some((layer) => layer.z === currentLayer().z - 1);
+  els.deleteLayerBtn.disabled = state.project.layers.length === 1;
+  els.undoBtn.disabled = state.undoStack.length === 0;
+  els.redoBtn.disabled = state.redoStack.length === 0;
+  renderEditorState();
+}
+
+function paintAt(col, row) {
+  if (state.editorLocked) return;
+  if (state.tool === "reference") {
+    const existing = findActiveReferenceAt(col, row);
+    if (existing) {
+      openEditReferenceDialog(existing.id);
+      return;
+    }
+    createReferenceAt(col, row);
+    return;
+  }
+  if (state.tool === "select") {
+    const reference = findActiveReferenceAt(col, row);
+    if (reference) openEditReferenceDialog(reference.id);
+    return;
+  }
+  if (state.tool === "template") {
+    setStatus("Plantilla activa.");
+    return;
+  }
+  const matrix = currentLayer().matrix;
+  const value = state.tool === "erase" ? "." : state.selectedColor;
+  if (state.tool === "fill") {
+    fillFrom(col, row);
+    return;
+  }
+  if (getCell(matrix, col, row) === value) return;
+  setCell(matrix, col, row, value);
+  updateCellElement(col, row, value);
+  markGeometryChanged();
+}
+
+function updateCellElement(col, row, value) {
+  const cell = els.grid.querySelector(`.cell[data-x="${col}"][data-y="${row}"]`);
+  if (!cell) return;
+  cell.classList.toggle("occupied", value !== ".");
+  cell.style.background = value === "." ? "" : state.project.palette[value];
+}
+
+function fillFrom(col, row) {
+  const matrix = currentLayer().matrix;
+  const target = getCell(matrix, col, row);
+  const replacement = state.selectedColor;
+  if (target === replacement) return;
+
+  pushHistory();
+  const { x, y } = state.project.size;
+  const queue = [[col, row]];
+  const seen = new Set();
+  while (queue.length) {
+    const [cx, cy] = queue.shift();
+    const key = `${cx},${cy}`;
+    if (seen.has(key) || cx < 0 || cy < 0 || cx >= x || cy >= y) continue;
+    seen.add(key);
+    if (getCell(matrix, cx, cy) !== target) continue;
+    setCell(matrix, cx, cy, replacement);
+    queue.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+  }
+  renderGrid();
+  markGeometryChanged("Relleno aplicado.");
+}
+
+function beginDraw(event) {
+  const cell = event.target.closest(".cell");
+  if (!cell) return;
+  if (state.editorLocked || event.pointerType === "touch" && event.isPrimary === false) return;
+  event.preventDefault();
+  state.isDrawing = true;
+  state.lastTouched = null;
+  state.dragStart = { x: event.clientX, y: event.clientY, moved: false };
+  if (state.tool !== "fill" && state.tool !== "reference" && state.tool !== "select" && state.tool !== "template") pushHistory();
+  touchCell(cell);
+}
+
+function moveDraw(event) {
+  if (!state.isDrawing || state.tool === "fill" || state.tool === "reference" || state.tool === "select") return;
+  if (!state.dragPaintEnabled) return;
+  const point = event.touches ? event.touches[0] : event;
+  if (state.dragStart && !state.dragStart.moved) {
+    const dx = Math.abs(point.clientX - state.dragStart.x);
+    const dy = Math.abs(point.clientY - state.dragStart.y);
+    if (dx < 10 && dy < 10) return;
+    state.dragStart.moved = true;
+  }
+  event.preventDefault();
+  const target = document.elementFromPoint(point.clientX, point.clientY);
+  const cell = target?.closest(".cell");
+  if (cell && els.grid.contains(cell)) touchCell(cell);
+}
+
+function endDraw() {
+  state.isDrawing = false;
+  state.lastTouched = null;
+  state.dragStart = null;
+}
+
+function touchCell(cell) {
+  const col = Number(cell.dataset.x);
+  const row = Number(cell.dataset.y);
+  const key = `${col},${row}`;
+  if (state.lastTouched === key) return;
+  state.lastTouched = key;
+  paintAt(col, row);
+}
+
+function findActiveReferenceAt(col, row) {
+  return activeReferencesForCurrentLayer().find((reference) => reference.x === col && reference.y === row);
+}
+
+function openCreateReferenceDialog(col, row) {
+  state.pendingPoint = { x: col, y: row };
+  state.editingReferenceId = null;
+  els.pointDialogTitle.textContent = `Nuevo punto en X ${col + 1}, Y ${row + 1}`;
+  els.pointLabel.value = "";
+  els.pointPersistent.checked = true;
+  els.pointPersistentWrap.hidden = false;
+  els.finishPointBtn.hidden = true;
+  els.deletePointBtn.hidden = true;
+  els.pointDialog.showModal();
+}
+
+function createReferenceAt(col, row) {
+  const z = currentLayer().z;
+  const id = nextReferenceId();
+  const type = normalizeReferenceType(state.referenceMode);
+  pushHistory();
+  state.project.references.push({
+    id,
+    x: col,
+    y: row,
+    type,
+    source_z: z,
+    start_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : z,
+    end_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : null,
+    label: ""
+  });
+  state.project.references.sort(compareReferenceIds);
+  render();
+  markChanged(`${id} ${referenceTypeLabel(type)} creada en X ${col + 1}, Y ${row + 1}, Z${z}.`);
+}
+
+function openEditReferenceDialog(id) {
+  const reference = state.project.references.find((item) => item.id === id);
+  if (!reference) return;
+  state.pendingPoint = null;
+  state.editingReferenceId = id;
+  els.pointDialogTitle.textContent = `${referenceShortLabel(reference)} | X ${reference.x + 1} | Y ${reference.y + 1} | ${referenceTypeLabel(reference.type)}`;
+  els.pointLabel.value = reference.label || "";
+  els.pointPersistentWrap.hidden = true;
+  els.finishPointBtn.hidden = false;
+  els.deletePointBtn.hidden = false;
+  els.pointDialog.showModal();
+}
+
+function savePointDialog() {
+  const label = els.pointLabel.value.trim();
+  if (state.editingReferenceId) {
+    const reference = state.project.references.find((item) => item.id === state.editingReferenceId);
+    if (!reference) return;
+    pushHistory();
+    reference.label = label;
+    closePointDialog();
+    render();
+    markChanged("Referencia editada.");
+    return;
+  }
+
+  if (!state.pendingPoint) return;
+  pushHistory();
+  const z = currentLayer().z;
+  const type = els.pointPersistent.checked ? REFERENCE_TYPES.NORMAL : REFERENCE_TYPES.TEMPORAL_NEXT_LAYER;
+  state.project.references.push({
+    id: nextReferenceId(),
+    x: state.pendingPoint.x,
+    y: state.pendingPoint.y,
+    type,
+    source_z: z,
+    start_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : z,
+    end_z: type === REFERENCE_TYPES.TEMPORAL_NEXT_LAYER ? z + 1 : null,
+    label
+  });
+  state.project.references.sort(compareReferenceIds);
+  closePointDialog();
+  render();
+  markChanged("Punto de referencia creado.");
+}
+
+function closePointDialog() {
+  state.pendingPoint = null;
+  state.editingReferenceId = null;
+  els.pointDialog.close();
+}
+
+function finishReference(id) {
+  const reference = state.project.references.find((item) => item.id === id);
+  if (!reference) return;
+  const z = currentLayer().z;
+  pushHistory();
+  if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.BACKWARD) {
+    reference.end_z = Math.min(reference.source_z, z);
+  } else {
+    reference.end_z = Math.max(reference.start_z, z);
+  }
+  render();
+  markChanged(`${reference.id} finalizada en Z ${reference.end_z}.`);
+}
+
+function deleteReference(id) {
+  const index = state.project.references.findIndex((item) => item.id === id);
+  if (index === -1) return;
+  if (!confirm("Eliminar esta referencia completamente?")) return;
+  pushHistory();
+  const [removed] = state.project.references.splice(index, 1);
+  closePointDialog();
+  render();
+  markChanged(`${removed.id} eliminada.`);
+}
+
+function locateReference(reference) {
+  const targetLayer = state.project.layers.findIndex((layer) => layer.z === reference.start_z);
+  if (targetLayer !== -1 && targetLayer !== state.currentLayer) {
+    state.currentLayer = targetLayer;
+    render();
+  }
+  const cell = els.grid.querySelector(`.cell[data-x="${reference.x}"][data-y="${reference.y}"]`);
+  if (!cell) return;
+  cell.scrollIntoView({ block: "center", inline: "center" });
+  cell.classList.add("active");
+  window.setTimeout(() => cell.classList.remove("active"), 700);
+}
+
+let viewer3dApiPromise = null;
+let viewer3dInstance = null;
+let organizerApiPromise = null;
+let pdfEnginePromise = null;
+let currentPdfDownload = null;
+
+function open3dViewer() {
+  console.log("[BrickLayer] Vista 3D solicitada");
+  if (location.protocol === "file:") {
+    setStatus("Para utilizar Vista 3D abre BrickLayer desde el servidor local.");
+    return;
+  }
+  if (!els.open3dBtn || !els.viewer3dDialog || !els.viewer3dCanvasWrap) {
+    console.error("[BrickLayer] Elementos del visor 3D no encontrados.");
+    setStatus("No se pudo abrir la Vista 3D.");
+    return;
+  }
+  if (!els.viewer3dDialog.open) {
+    els.viewer3dInfo.textContent = "Cargando visor 3D...";
+    try {
+      els.viewer3dDialog.showModal();
+    } catch (error) {
+      console.error("[BrickLayer] No se pudo abrir el modal 3D:", error);
+      setStatus("No se pudo abrir la Vista 3D.");
+      return;
+    }
+  }
+  setStatus("Preparando Vista 3D...");
+  const options = create3dViewerOptions();
+  if (!viewer3dApiPromise) {
+    viewer3dApiPromise = import(VIEWER3D_MODULE_URL);
+  }
+  viewer3dApiPromise
+    .then((module) => {
+      module.openBrickViewer(options);
+      viewer3dInstance = module;
+      setStatus("Vista 3D abierta.");
+    })
+    .catch((error) => {
+      console.error("[BrickLayer] Error al abrir Vista 3D:", error);
+      viewer3dApiPromise = null;
+      els.viewer3dInfo.textContent = "No se pudo cargar el visor 3D.";
+      setStatus("No se pudo abrir la Vista 3D.");
+    });
+}
+
+function create3dViewerOptions() {
+  return {
+    dialog: els.viewer3dDialog,
+    container: els.viewer3dCanvasWrap,
+    info: els.viewer3dInfo,
+    layerSelect: els.viewer3dLayerSelect,
+    allLayers: els.viewer3dAllLayers,
+    controls: {
+      recolorToggle: els.viewer3dRecolorToggle,
+      recolorPanel: els.viewer3dRecolorPanel,
+      modeConnected: els.viewer3dModeConnected,
+      modeAllColor: els.viewer3dModeAllColor,
+      actionReplace: els.viewer3dActionReplace,
+      actionAdd: els.viewer3dActionAdd,
+      actionRemove: els.viewer3dActionRemove,
+      selectionCount: els.viewer3dSelectionCount,
+      selectionColor: els.viewer3dSelectionColor,
+      palette: els.viewer3dColorPalette,
+      colorSwatch: els.viewer3dColorSwatch,
+      colorPopover: els.viewer3dColorPopover,
+      applyColor: els.viewer3dApplyColor,
+      clearSelection: els.viewer3dClearSelection,
+      exitRecolor: els.viewer3dExitRecolor
+    },
+    project: JSON.parse(JSON.stringify(normalizeProject(state.project))),
+    currentZ: currentLayer().z,
+    getViewerBackground: currentViewerBackground,
+    onApplyColor: apply3dColorBatch
+  };
+}
+
+function apply3dColorBatch(selectionKeys, newColorCode) {
+  if (!Array.isArray(selectionKeys) || !selectionKeys.length || !state.project.palette[newColorCode]) return null;
+  pushHistory();
+  const changes = recolorProjectVoxels(state.project, new Set(selectionKeys), newColorCode);
+  if (!changes.length) {
+    state.undoStack.pop();
+    updateButtons();
+    return JSON.parse(JSON.stringify(normalizeProject(state.project)));
+  }
+  renderPalette();
+  render();
+  markGeometryChanged(`Color aplicado a ${changes.length.toLocaleString("es-CO")} bloques.`);
+  return JSON.parse(JSON.stringify(normalizeProject(state.project)));
+}
+
+function refreshOpen3dViewer() {
+  if (!els.viewer3dDialog.open || location.protocol === "file:") return;
+  if (!viewer3dApiPromise) {
+    viewer3dApiPromise = import(VIEWER3D_MODULE_URL);
+  }
+  viewer3dApiPromise
+    .then((module) => {
+      module.openBrickViewer(create3dViewerOptions());
+      viewer3dInstance = module;
+    })
+    .catch((error) => {
+      console.error("[BrickLayer] Error al actualizar Vista 3D:", error);
+      viewer3dApiPromise = null;
+    });
+}
+
+function openOrganizer() {
+  els.organizerDialog.showModal();
+  renderOrganizerPanel();
+}
+
+function runOrganizer() {
+  const maxPieceLength = Number(els.organizerMaxLength.value);
+  const priority = els.organizerPriority.value;
+  if (!organizerApiPromise) organizerApiPromise = import("./organizer.js");
+  els.organizerSummary.textContent = "Organizando bloques...";
+  return organizerApiPromise
+    .then((module) => {
+      const source = JSON.parse(JSON.stringify(normalizeProject(state.project)));
+      const layout = module.generateConstructionLayout(source, { maxPieceLength, priority });
+      const errors = module.validateConstructionLayout(source, layout);
+      if (errors.length) {
+        els.organizerSummary.textContent = `Error de organización: ${errors[0]}`;
+        return false;
+      }
+      state.project.construction_layout = layout;
+      saveProject();
+      renderGrid();
+      renderStats();
+      renderOrganizerPanel();
+      updatePdfSummary();
+      setStatus("Organización actualizada.");
+    })
+    .catch((error) => {
+      console.error("[BrickLayer] Error al organizar bloques:", error);
+      els.organizerSummary.textContent = "No se pudo organizar el modelo.";
+    });
+}
+
+function renderOrganizerPanel() {
+  const layout = state.project.construction_layout;
+  if (!layout) {
+    els.organizerSummary.innerHTML = "<strong>Sin organización generada</strong><span>Configura el tamaño y pulsa Reorganizar.</span>";
+    els.organizerInventory.innerHTML = "";
+    els.organizerLayerStats.innerHTML = "";
+    els.organizerWarnings.innerHTML = "";
+    return;
+  }
+
+  els.organizerMaxLength.value = String(layout.max_piece_length || 3);
+  els.organizerPriority.value = layout.priority || "balanced";
+  els.organizerSummary.innerHTML = "";
+  const title = document.createElement("strong");
+  title.textContent = layout.outdated ? "Organización pendiente de actualizar" : "Organización vigente";
+  const cells = document.createElement("span");
+  cells.textContent = `Celdas totales: ${layout.totals.cells.toLocaleString("es-CO")}`;
+  const pieces = document.createElement("span");
+  pieces.textContent = `Piezas físicas: ${layout.totals.physical_pieces.toLocaleString("es-CO")}`;
+  const stability = document.createElement("span");
+  stability.textContent = `Estabilidad estimada: ${layout.stability.score}/100`;
+  els.organizerSummary.append(title, cells, pieces, stability);
+  renderInventory(layout);
+  renderLayerStats(layout);
+  renderWarnings(layout);
+}
+
+function renderInventory(layout) {
+  els.organizerInventory.innerHTML = "";
+  const title = document.createElement("h3");
+  title.textContent = "Inventario";
+  els.organizerInventory.appendChild(title);
+  Object.entries(layout.inventory).forEach(([color, counts]) => {
+    const row = document.createElement("div");
+    row.className = "organizer-row";
+    row.innerHTML = `<span>${color}</span><span>1x1 ${counts["1x1"] || 0}  1x2 ${counts["1x2"] || 0}  1x3 ${counts["1x3"] || 0}</span>`;
+    els.organizerInventory.appendChild(row);
+  });
+}
+
+function renderLayerStats(layout) {
+  els.organizerLayerStats.innerHTML = "";
+  const title = document.createElement("h3");
+  title.textContent = "Capas";
+  els.organizerLayerStats.appendChild(title);
+  layout.layer_stats.forEach((stat) => {
+    const row = document.createElement("div");
+    row.className = "organizer-row";
+    row.innerHTML = `<span>Z ${stat.z} · ${stat.cells} celdas</span><span>${stat.physical_pieces} piezas · E ${stat.stability}</span>`;
+    els.organizerLayerStats.appendChild(row);
+  });
+}
+
+function renderWarnings(layout) {
+  els.organizerWarnings.innerHTML = "";
+  const title = document.createElement("h3");
+  title.textContent = "Estabilidad";
+  els.organizerWarnings.appendChild(title);
+  const warnings = layout.stability.warnings.length ? layout.stability.warnings : ["Sin advertencias"];
+  warnings.slice(0, 20).forEach((warning) => {
+    const row = document.createElement("div");
+    row.className = "organizer-row";
+    row.textContent = warning;
+    els.organizerWarnings.appendChild(row);
+  });
+}
+
+function openPdfDialog() {
+  resetPdfDownload();
+  applyPdfProfileDefaults();
+  updatePdfSummary();
+  els.pdfDialog.showModal();
+}
+
+function resetPdfDownload() {
+  if (currentPdfDownload?.url) URL.revokeObjectURL(currentPdfDownload.url);
+  currentPdfDownload = null;
+  els.downloadPdfBtn.disabled = true;
+  els.sharePdfBtn.disabled = true;
+}
+
+function minProjectZ() {
+  return state.project.layers.length ? Math.min(...state.project.layers.map((layer) => layer.z)) : 0;
+}
+
+function maxProjectZ() {
+  return state.project.layers.length ? Math.max(...state.project.layers.map((layer) => layer.z)) : 0;
+}
+
+function applyPdfProfileDefaults() {
+  const professional = els.pdfProfile.value === "professional";
+  const minZ = minProjectZ();
+  const maxZ = maxProjectZ();
+  els.pdfFromZ.value = String(minZ);
+  els.pdfToZ.value = String(maxZ);
+  els.pdfAllLayers.checked = true;
+  els.pdfShowLayerNumber.checked = true;
+  els.pdfShowMatrix.checked = true;
+  els.pdfShowColors.checked = true;
+  els.pdfShowPieces.checked = true;
+  els.pdfShowReferences.checked = true;
+  els.pdfShowLayerPieces.checked = true;
+  els.pdfShowInventory.checked = professional;
+  els.pdfShow3d.checked = professional;
+  els.pdfShowStats.checked = true;
+  els.pdfShowPieceIds.checked = false;
+  els.pdf3dFrequency.value = professional ? "every5" : "cover";
+  els.pdfOrientation.value = "auto";
+  updatePdfRangeState();
+}
+
+function updatePdfRangeState() {
+  const disabled = els.pdfAllLayers.checked;
+  els.pdfFromZ.disabled = disabled;
+  els.pdfToZ.disabled = disabled;
+  updatePdfSummary();
+}
+
+function collectPdfSettings() {
+  const minZ = minProjectZ();
+  const maxZ = maxProjectZ();
+  const fromZ = els.pdfAllLayers.checked ? minZ : clamp(Number(els.pdfFromZ.value), minZ, maxZ);
+  const toZ = els.pdfAllLayers.checked ? maxZ : clamp(Number(els.pdfToZ.value), minZ, maxZ);
+  return {
+    profile: els.pdfProfile.value === "professional" ? "professional" : "quick",
+    layerMode: els.pdfAllLayers.checked ? "all" : "range",
+    fromZ: Math.min(fromZ, toZ),
+    toZ: Math.max(fromZ, toZ),
+    pageOrientation: els.pdfOrientation.value,
+    useOrganization: true,
+    includeLayerNumber: els.pdfShowLayerNumber.checked,
+    includeMatrix: els.pdfShowMatrix.checked,
+    includeColors: els.pdfShowColors.checked,
+    includePieceDivisions: els.pdfShowPieces.checked,
+    includeReferences: els.pdfShowReferences.checked,
+    includeLayerPieceCount: els.pdfShowLayerPieces.checked,
+    includeInventory: els.pdfShowInventory.checked,
+    include3dViews: els.pdfShow3d.checked,
+    includeStats: els.pdfShowStats.checked,
+    includePieceIds: els.pdfShowPieceIds.checked,
+    cumulative3d: els.pdf3dFrequency.value
+  };
+}
+
+function updatePdfSummary() {
+  if (!els.pdfSummary) return;
+  const settings = collectPdfSettings();
+  const selectedLayers = state.project.layers.filter((layer) => {
+    return settings.layerMode === "all" || (layer.z >= settings.fromZ && layer.z <= settings.toZ);
+  });
+  const cells = selectedLayers.reduce((sum, layer) => sum + countLayerBlocks(layer), 0);
+  const layout = state.project.construction_layout;
+  const hasValidLayout = Boolean(layout && !layout.outdated && layout.generated_from_revision === (state.project.revision || 0));
+  els.pdfOutdatedWarning.hidden = hasValidLayout;
+  els.pdfSummary.textContent = `${selectedLayers.length} capas, ${cells.toLocaleString("es-CO")} celdas, ${settings.profile === "professional" ? "manual profesional" : "manual rapido"}.`;
+}
+
+async function generatePdfFromDialog() {
+  resetPdfDownload();
+  const settings = collectPdfSettings();
+  const project = JSON.parse(JSON.stringify(normalizeProject(state.project)));
+  els.generatePdfBtn.disabled = true;
+  els.pdfProgress.value = 1;
+  els.pdfProgressText.textContent = "Preparando PDF...";
+  try {
+    if (!pdfEnginePromise) pdfEnginePromise = import("./pdf/pdf-engine.js");
+    const { generateManualPdf } = await pdfEnginePromise;
+    const result = await generateManualPdf(project, settings, {
+      onProgress({ percent, message }) {
+        els.pdfProgress.value = percent;
+        els.pdfProgressText.textContent = message;
+      }
+    });
+    currentPdfDownload = {
+      blob: result.blob,
+      fileName: result.fileName,
+      url: URL.createObjectURL(result.blob)
+    };
+    els.downloadPdfBtn.disabled = false;
+    els.sharePdfBtn.disabled = !canShareCurrentPdf();
+    els.pdfSummary.textContent = `${result.fileName} listo. ${result.pages} paginas.`;
+    setStatus("PDF generado.");
+  } catch (error) {
+    console.error("[BrickLayer] Error al generar PDF:", error);
+    els.pdfProgressText.textContent = "Error al generar PDF";
+    els.pdfSummary.textContent = error?.message || "No se pudo generar el PDF.";
+    setStatus("No se pudo generar el PDF.");
+  } finally {
+    els.generatePdfBtn.disabled = false;
+  }
+}
+
+function downloadCurrentPdf() {
+  if (!currentPdfDownload) return;
+  const link = document.createElement("a");
+  link.href = currentPdfDownload.url;
+  link.download = currentPdfDownload.fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setStatus("Descarga PDF iniciada.");
+}
+
+function canShareCurrentPdf() {
+  if (!currentPdfDownload || !navigator.share || !navigator.canShare || typeof File === "undefined") return false;
+  const file = new File([currentPdfDownload.blob], currentPdfDownload.fileName, { type: "application/pdf" });
+  return navigator.canShare({ files: [file] });
+}
+
+async function shareCurrentPdf() {
+  if (!canShareCurrentPdf()) return;
+  const file = new File([currentPdfDownload.blob], currentPdfDownload.fileName, { type: "application/pdf" });
+  try {
+    await navigator.share({ files: [file], title: currentPdfDownload.fileName });
+  } catch (error) {
+    if (error?.name !== "AbortError") setStatus("No se pudo compartir el PDF.");
+  }
+}
+
+function resizeProject() {
+  const x = clamp(Number(els.sizeX.value) || 12, 1, 64);
+  const y = clamp(Number(els.sizeY.value) || 12, 1, 64);
+  if (x === state.project.size.x && y === state.project.size.y) return;
+  pushHistory();
+  state.project.size = { x, y };
+  state.project.layers = state.project.layers.map((layer) => ({
+    ...layer,
+    matrix: normalizeMatrix(layer.matrix, x, y)
+  }));
+  render();
+  markGeometryChanged("Tamaño actualizado.");
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function selectColor(code) {
+  if (!COLOR_SHORTCUTS.has(code)) return;
+  state.selectedColor = code;
+  state.tool = "paint";
+  renderPalette();
+  updateButtons();
+  if (state.activePanel === "colors" && window.matchMedia("(max-width: 899px)").matches) closeContextPanel();
+  setStatus(`PINTAR | ${code} ${COLOR_NAMES[code] || ""}`);
+}
+
+function setTool(tool) {
+  state.tool = tool;
+  updateButtons();
+  if (tool === "reference") setStatus(`REFERENCIA | Siguiente: ${nextReferenceId()}`);
+  else setStatus(toolLabel(tool).toUpperCase());
+}
+
+function previousLayer() {
+  if (state.currentLayer <= 0) return;
+  state.currentLayer -= 1;
+  render();
+}
+
+function nextLayer() {
+  if (state.currentLayer >= state.project.layers.length - 1) return;
+  state.currentLayer += 1;
+  render();
+}
+
+function firstLayer() {
+  if (state.currentLayer === 0) return;
+  state.currentLayer = 0;
+  render();
+}
+
+function lastLayer() {
+  const last = state.project.layers.length - 1;
+  if (state.currentLayer === last) return;
+  state.currentLayer = last;
+  render();
+}
+
+function undo() {
+  if (!state.undoStack.length) return;
+  state.redoStack.push(JSON.stringify(state.project));
+  restoreProject(state.undoStack.pop());
+  setStatus("Deshacer aplicado.");
+}
+
+function redo() {
+  if (!state.redoStack.length) return;
+  state.undoStack.push(JSON.stringify(state.project));
+  restoreProject(state.redoStack.pop());
+  setStatus("Rehacer aplicado.");
+}
+
+function toggleEditorLock() {
+  state.editorLocked = !state.editorLocked;
+  renderEditorState();
+  setStatus(state.editorLocked ? "NAVEGAR" : "EDITAR");
+}
+
+function panelLabel(panel) {
+  const labels = {
+    layers: "Capas",
+    blocks: "Bloques",
+    references: "Referencias",
+    image: "Imagen",
+    view3d: "Vista 3D",
+    project: "Proyecto",
+    settings: "Ajustes",
+    help: "Ayuda"
+  };
+  return labels[panel] || "Panel";
+}
+
+function openContextPanel(panel) {
+  if (!panel) return;
+  state.activePanel = state.activePanel === panel ? null : panel;
+  renderContextPanel();
+}
+
+function closeContextPanel() {
+  state.activePanel = null;
+  renderContextPanel();
+}
+
+function renderContextPanel() {
+  const active = state.activePanel;
+  els.contextPanel.hidden = !active || active === "colors";
+  els.contextPanelTitle.textContent = panelLabel(active);
+  document.querySelector(".palette-rail")?.classList.toggle("mobile-open", active === "colors");
+  document.querySelectorAll(".rail-button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.panelTarget === active);
+    button.setAttribute("aria-pressed", String(button.dataset.panelTarget === active));
+  });
+  document.querySelectorAll(".context-section").forEach((section) => {
+    section.hidden = section.dataset.panel !== active;
+  });
+  requestAnimationFrame(refitGridIfNeeded);
+}
+
+function setImageEditMode(enabled) {
+  state.imageEditMode = Boolean(enabled);
+  renderReference();
+  setStatus(state.imageEditMode ? "EDITAR IMAGEN" : "IMAGEN BLOQUEADA");
+}
+
+function setImageScale(scale) {
+  state.imageState.scale = clamp(scale, 0.1, 5);
+  renderReference();
+  markChanged();
+}
+
+function centerReferenceImage() {
+  const scroller = els.gridScroller;
+  const image = els.referenceImage;
+  const width = image.naturalWidth ? image.naturalWidth * state.imageState.scale : scroller.clientWidth * 0.7;
+  const height = image.naturalHeight ? image.naturalHeight * state.imageState.scale : scroller.clientHeight * 0.7;
+  state.imageState.x = Math.max(0, (scroller.scrollWidth - width) / 2);
+  state.imageState.y = Math.max(0, (scroller.scrollHeight - height) / 2);
+  renderReference();
+  markChanged();
+}
+
+function resetReferenceImage() {
+  state.imageState = {
+    x: 16,
+    y: 16,
+    scale: 1,
+    opacity: 100,
+    blockOpacity: 100
+  };
+  renderReference();
+  renderGrid();
+  markChanged("Imagen restablecida.");
+}
+
+function beginImageDrag(event) {
+  if (!state.imageEditMode || !state.referenceVisible || !state.referenceDataUrl) return;
+  event.preventDefault();
+  els.referenceView.setPointerCapture?.(event.pointerId);
+  state.imageDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    imageX: state.imageState.x,
+    imageY: state.imageState.y
+  };
+}
+
+function moveImageDrag(event) {
+  if (!state.imageDrag || state.imageDrag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  state.imageState.x = state.imageDrag.imageX + event.clientX - state.imageDrag.startX;
+  state.imageState.y = state.imageDrag.imageY + event.clientY - state.imageDrag.startY;
+  renderReference();
+}
+
+function endImageDrag(event) {
+  if (!state.imageDrag || state.imageDrag.pointerId !== event.pointerId) return;
+  state.imageDrag = null;
+  markChanged();
+}
+
+function setZoom(value, options = {}) {
+  if (!options.keepFitMode) state.zoomMode = "manual";
+  els.gridZoom.value = String(clamp(Number(value), Number(els.gridZoom.min), Number(els.gridZoom.max)));
+  renderGrid();
+  renderEditorState();
+  if (options.center) centerGridInViewport();
+  else resetGridViewportMargins();
+}
+
+function zoomIn() {
+  setZoom(Number(els.gridZoom.value) + 4);
+}
+
+function zoomOut() {
+  setZoom(Number(els.gridZoom.value) - 4);
+}
+
+function fitZoom() {
+  state.zoomMode = "fit";
+  const cell = calculateFitCellSize();
+  setZoom(cell, { keepFitMode: true, center: true });
+}
+
+function calculateFitCellSize() {
+  const columns = Math.max(1, state.project.size.x + 1);
+  const rows = Math.max(1, state.project.size.y + 1);
+  const rect = els.gridScroller.getBoundingClientRect();
+  const computed = getComputedStyle(els.gridScroller);
+  const borderX = parseFloat(computed.borderLeftWidth) + parseFloat(computed.borderRightWidth);
+  const borderY = parseFloat(computed.borderTopWidth) + parseFloat(computed.borderBottomWidth);
+  const paddingX = parseFloat(computed.paddingLeft) + parseFloat(computed.paddingRight);
+  const paddingY = parseFloat(computed.paddingTop) + parseFloat(computed.paddingBottom);
+  const matrixPadding = 16;
+  const margin = 16;
+  const visibleWidth = rect.width || els.gridScroller.clientWidth;
+  const visibleHeight = rect.height || els.gridScroller.clientHeight;
+  const availableWidth = Math.max(1, visibleWidth - borderX - paddingX - matrixPadding - margin * 2);
+  const availableHeight = Math.max(1, visibleHeight - borderY - paddingY - matrixPadding - margin * 2);
+  const byWidth = Math.floor(availableWidth / columns);
+  const byHeight = Math.floor(availableHeight / rows);
+  return clamp(Math.min(byWidth, byHeight), Number(els.gridZoom.min), Number(els.gridZoom.max));
+}
+
+function centerGridInViewport() {
+  requestAnimationFrame(() => {
+    const gap = 8;
+    const gridWidth = els.grid.offsetWidth;
+    const gridHeight = els.grid.offsetHeight;
+    els.grid.style.marginLeft = `${Math.max(gap, Math.floor((els.gridScroller.clientWidth - gridWidth) / 2))}px`;
+    els.grid.style.marginTop = `${Math.max(gap, Math.floor((els.gridScroller.clientHeight - gridHeight) / 2))}px`;
+    els.grid.style.marginRight = `${gap}px`;
+    els.grid.style.marginBottom = `${gap}px`;
+    const gridStyle = getComputedStyle(els.grid);
+    const contentWidth = els.grid.offsetWidth + parseFloat(gridStyle.marginLeft || 0) + parseFloat(gridStyle.marginRight || 0);
+    const contentHeight = els.grid.offsetHeight + parseFloat(gridStyle.marginTop || 0) + parseFloat(gridStyle.marginBottom || 0);
+    els.gridScrollContent.style.width = `${Math.ceil(contentWidth)}px`;
+    els.gridScrollContent.style.height = `${Math.ceil(contentHeight)}px`;
+    const left = Math.max(0, (els.gridScrollContent.scrollWidth - els.gridScroller.clientWidth) / 2);
+    const top = Math.max(0, (els.gridScrollContent.scrollHeight - els.gridScroller.clientHeight) / 2);
+    els.gridScroller.scrollLeft = left;
+    els.gridScroller.scrollTop = top;
+  });
+}
+
+function resetGridViewportMargins() {
+  els.grid.style.marginLeft = "8px";
+  els.grid.style.marginTop = "8px";
+  els.grid.style.marginRight = "8px";
+  els.grid.style.marginBottom = "8px";
+  const gridStyle = getComputedStyle(els.grid);
+  const contentWidth = els.grid.offsetWidth + parseFloat(gridStyle.marginLeft || 0) + parseFloat(gridStyle.marginRight || 0);
+  const contentHeight = els.grid.offsetHeight + parseFloat(gridStyle.marginTop || 0) + parseFloat(gridStyle.marginBottom || 0);
+  els.gridScrollContent.style.width = `${Math.ceil(contentWidth)}px`;
+  els.gridScrollContent.style.height = `${Math.ceil(contentHeight)}px`;
+}
+
+function refitGridIfNeeded() {
+  if (state.zoomMode !== "fit") return;
+  const next = calculateFitCellSize();
+  if (String(next) !== els.gridZoom.value) {
+    setZoom(next, { keepFitMode: true, center: true });
+  } else {
+    centerGridInViewport();
+  }
+}
+
+function shouldIgnoreShortcut(event) {
+  const target = event.target;
+  if (!target) return false;
+  const tag = target.tagName;
+  if (target.isContentEditable) return true;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  const dialog = target.closest?.("dialog");
+  return Boolean(dialog?.open && dialog.querySelector("input:focus, textarea:focus, select:focus, [contenteditable='true']:focus"));
+}
+
+function handleKeyboard(event) {
+  if (shouldIgnoreShortcut(event)) return;
+  const key = event.key.toLowerCase();
+  const upper = key.toUpperCase();
+
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
+  if (COLOR_SHORTCUTS.has(upper)) {
+    event.preventDefault();
+    selectColor(upper);
+    return;
+  }
+  if (key === "k") {
+    event.preventDefault();
+    addLayer();
+  } else if (key === "d") {
+    event.preventDefault();
+    duplicateCurrentLayer();
+  } else if (key === "z") {
+    event.preventDefault();
+    undo();
+  } else if (key === "y") {
+    event.preventDefault();
+    redo();
+  } else if (key === "e") {
+    event.preventDefault();
+    setTool("erase");
+  } else if (key === "f") {
+    event.preventDefault();
+    setTool("reference");
+  } else if (key === "t") {
+    event.preventDefault();
+    setTool("template");
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    if (event.shiftKey) firstLayer();
+    else previousLayer();
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    if (event.shiftKey) lastLayer();
+    else nextLayer();
+  } else if (event.key === " ") {
+    event.preventDefault();
+    toggleEditorLock();
+  } else if (event.key === "+" || event.key === "=") {
+    event.preventDefault();
+    zoomIn();
+  } else if (event.key === "-") {
+    event.preventDefault();
+    zoomOut();
+  } else if (event.key === "0") {
+    event.preventDefault();
+    fitZoom();
+  }
+}
+
+function addLayer() {
+  const targetZ = currentLayer().z + 1;
+  const existingIndex = state.project.layers.findIndex((layer) => layer.z === targetZ);
+  if (existingIndex !== -1) {
+    state.currentLayer = existingIndex;
+    render();
+    setStatus(`Ya existe Z ${targetZ}; se abrió esa capa.`);
+    return;
+  }
+  pushHistory();
+  state.project.layers.push({ z: targetZ, matrix: createEmptyMatrix(state.project.size.x, state.project.size.y) });
+  state.project.layers.sort((a, b) => a.z - b.z);
+  state.currentLayer = state.project.layers.findIndex((layer) => layer.z === targetZ);
+  render();
+  markGeometryChanged("Nueva capa creada.");
+}
+
+function copyPreviousLayer() {
+  const previousLayer = state.project.layers.find((layer) => layer.z === currentLayer().z - 1);
+  if (!previousLayer) return;
+  if (countLayerBlocks(currentLayer()) && !confirm("La capa actual contiene bloques. Sobrescribir con la capa anterior?")) return;
+  pushHistory();
+  currentLayer().matrix = cloneMatrix(previousLayer.matrix);
+  renderGrid();
+  markGeometryChanged("Capa anterior copiada.");
+}
+
+function duplicateCurrentLayer() {
+  const targetZ = currentLayer().z + 1;
+  const existingIndex = state.project.layers.findIndex((layer) => layer.z === targetZ);
+  if (existingIndex !== -1) {
+    state.currentLayer = existingIndex;
+    render();
+    setStatus(`No se duplicó: ya existe Z ${targetZ}.`);
+    return;
+  }
+  pushHistory();
+  state.project.layers.push({ z: targetZ, matrix: cloneMatrix(currentLayer().matrix) });
+  state.project.layers.sort((a, b) => a.z - b.z);
+  state.currentLayer = state.project.layers.findIndex((layer) => layer.z === targetZ);
+  render();
+  markGeometryChanged("Capa duplicada.");
+}
+
+function deleteLayer() {
+  if (state.project.layers.length === 1) return;
+  if (!confirm("Eliminar la capa actual?")) return;
+  pushHistory();
+  const deletedZ = currentLayer().z;
+  state.project.layers.splice(state.currentLayer, 1);
+  state.project.references = state.project.references.filter((reference) => reference.source_z !== deletedZ);
+  state.currentLayer = Math.max(0, state.currentLayer - 1);
+  render();
+  markGeometryChanged("Capa eliminada.");
+}
+
+function clearLayer() {
+  if (!confirm("Limpiar la capa actual?")) return;
+  pushHistory();
+  currentLayer().matrix = createEmptyMatrix(state.project.size.x, state.project.size.y);
+  renderGrid();
+  markGeometryChanged("Capa limpia.");
+}
+
+function validateProject(project) {
+  const errors = [];
+  const allowed = new Set([".", ...Object.keys(project.palette)]);
+  const seenZ = new Set();
+  const validZ = new Set(project.layers.map((layer) => layer.z));
+  project.layers.forEach((layer, index) => {
+    if (seenZ.has(layer.z)) errors.push(`Z duplicado: ${layer.z}`);
+    seenZ.add(layer.z);
+    if (index > 0 && project.layers[index - 1].z > layer.z) errors.push("Las capas no estan ordenadas por Z.");
+    if (layer.matrix.length !== project.size.y) errors.push(`La capa ${layer.z} no tiene ${project.size.y} filas.`);
+    layer.matrix.forEach((row, rowIndex) => {
+      if (row.length !== project.size.x) errors.push(`Fila ${rowIndex + 1} de capa ${layer.z} no mide ${project.size.x}.`);
+      for (const char of row) {
+        if (!allowed.has(char)) errors.push(`Codigo invalido "${char}" en capa ${layer.z}.`);
+      }
+    });
+  });
+  const seenReferenceIds = new Set();
+  project.references.forEach((reference) => {
+    if (seenReferenceIds.has(reference.id)) errors.push(`Referencia duplicada: ${reference.id}`);
+    seenReferenceIds.add(reference.id);
+    if (reference.x < 0 || reference.x >= project.size.x) errors.push(`${reference.id} tiene X fuera de rango.`);
+    if (reference.y < 0 || reference.y >= project.size.y) errors.push(`${reference.id} tiene Y fuera de rango.`);
+    if (!validZ.has(reference.source_z)) errors.push(`${reference.id} tiene source_z invalido.`);
+    if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.NORMAL && !validZ.has(reference.start_z)) {
+      errors.push(`${reference.id} tiene start_z invalido.`);
+    }
+    if (normalizeReferenceType(reference.type) === REFERENCE_TYPES.NORMAL && reference.end_z !== null && reference.end_z < reference.start_z) {
+      errors.push(`${reference.id} tiene end_z menor que start_z.`);
+    }
+  });
+  return errors;
+}
+
+function serializeCurrentProjectForExport() {
+  syncImageStateToProject();
+  const exportable = normalizeProject(state.project);
+  const errors = validateProject(exportable);
+  if (errors.length) {
+    throw new Error(errors[0]);
+  }
+  return exportable;
+}
+
+function downloadBlob(blob, fileName) {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  const url = link.href;
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function exportProject() {
+  let exportable;
+  try {
+    exportable = serializeCurrentProjectForExport();
+  } catch (error) {
+    setStatus(`No se puede exportar: ${error.message}`);
+    return;
+  }
+  const blob = new Blob([JSON.stringify(exportable, null, 2)], { type: "application/json" });
+  const safeName = exportable.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "modelo";
+  downloadBlob(blob, `${safeName}_${Date.now().toString().slice(-4)}.bricklayers`);
+  setStatus("Archivo .bricklayers generado.");
+}
+
+async function exportBrickAiPackage() {
+  let project;
+  try {
+    project = serializeCurrentProjectForExport();
+  } catch (error) {
+    setStatus(`No se puede exportar .brickai: ${error.message}`);
+    return;
+  }
+
+  els.exportBrickAiBtn.disabled = true;
+  setStatus("Preparando Brick AI...");
+  try {
+    const { renderBrickAiView } = await import(BRICKAI_RENDERER_MODULE_URL);
+    setStatus("Modelo .bricklayers...");
+    await waitForUiFrame();
+    const modelText = JSON.stringify(project, null, 2);
+    const viewImages = {};
+    for (let index = 0; index < BRICKAI_VIEWS.length; index += 1) {
+      const view = BRICKAI_VIEWS[index];
+      setStatus(`${view.label} ${index + 1}/${BRICKAI_VIEWS.length}...`);
+      await waitForUiFrame();
+      viewImages[view.key] = await renderBrickAiView(project, view.key);
+    }
+    setStatus("Generando paquete Brick AI...");
+    await waitForUiFrame();
+    const packageResult = await createBrickAiPackage({ project, modelText, viewImages });
+    downloadBlob(packageResult.blob, sanitizeBrickAiFileName(project.name));
+    setStatus("Archivo .brickai generado.");
+  } catch (error) {
+    console.error("[BrickLayer] Error al exportar .brickai:", error);
+    setStatus(`No se pudo generar .brickai: ${error?.message || "error desconocido"}`);
+  } finally {
+    els.exportBrickAiBtn.disabled = false;
+  }
+}
+
+function waitForUiFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function importProject(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const imported = JSON.parse(String(reader.result));
+      if (imported.format !== "bricklayers-v1") {
+        setStatus("Error: el archivo no usa format bricklayers-v1.");
+        return;
+      }
+      const normalized = normalizeProject(imported);
+      const errors = validateProject(normalized);
+      if (errors.length) {
+        setStatus(`Error: ${errors[0]}`);
+        return;
+      }
+      pushHistory();
+      state.project = normalized;
+      state.currentLayer = 0;
+      syncImageStateFromProject();
+      renderPalette();
+      render();
+      refreshOpen3dViewer();
+      markChanged("Proyecto importado.");
+    } catch {
+      setStatus("Error: no se pudo abrir el archivo.");
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function importLdrProject(file) {
+  if (file.size > MAX_LDR_BYTES) {
+    setStatus("Error: el archivo LDR es demasiado grande.");
+    return;
+  }
+  const previousProject = JSON.stringify(state.project);
+  const previousLayer = state.currentLayer;
+  const previousReferenceState = {
+    dataUrl: state.referenceDataUrl,
+    visible: state.referenceVisible,
+    imageState: { ...state.imageState }
+  };
+  try {
+    setStatus("Importando LDR...");
+    const text = await file.text();
+    const imported = await importLdrContent(text, {
+      name: projectNameFromLdrFilename(file.name)
+    });
+    const normalized = normalizeProject(imported.project);
+    const errors = validateProject(normalized);
+    if (errors.length) {
+      setStatus(`Error LDR: ${errors[0]}`);
+      return;
+    }
+    pushHistory();
+    state.project = normalized;
+    state.currentLayer = 0;
+    syncImageStateFromProject();
+    renderPalette();
+    render();
+    refreshOpen3dViewer();
+    saveProject();
+    const source = imported.sourceType === "hongmeng" ? "Hongmeng" : "LDraw";
+    const colorSummary = imported.stats.colors.map((color) => `${color.id}->${color.colorCode}`).join(", ");
+    console.info("[BrickLayer] Colores LDR detectados:", imported.stats.colors);
+    const warningText = imported.warnings.length ? ` Avisos: ${imported.warnings.join(" ")}` : "";
+    setStatus(`LDR ${source} importado: ${imported.stats.voxels} voxels, ${imported.stats.dimensions.z} capas, ${imported.stats.colors.length} colores (${colorSummary}).${warningText}`);
+  } catch (error) {
+    state.project = normalizeProject(JSON.parse(previousProject));
+    state.currentLayer = previousLayer;
+    state.referenceDataUrl = previousReferenceState.dataUrl;
+    state.referenceVisible = previousReferenceState.visible;
+    state.imageState = previousReferenceState.imageState;
+    renderPalette();
+    render();
+    renderReference();
+    refreshOpen3dViewer();
+    if (error instanceof UnsupportedLDrawPiecesError) {
+      console.warn("[BrickLayer] Piezas LDR no soportadas:", error.unsupportedPieces);
+      setStatus(`Error LDR: piezas no compatibles (${error.unsupportedPieces.length} tipos): ${unsupportedPiecesStatus(error.unsupportedPieces)}`);
+      return;
+    }
+    setStatus(`Error LDR: ${error.message || "no se pudo importar el archivo."}`);
+  }
+}
+
+function unsupportedPiecesStatus(unsupportedPieces) {
+  const summary = unsupportedPieces.slice(0, 6).map((piece) => `${piece.part} x${piece.count}`).join(", ");
+  return unsupportedPieces.length > 6 ? `${summary}, ... ver consola` : summary;
+}
+
+function setStatus(message) {
+  els.status.textContent = message;
+}
+
+function bindEvents() {
+  els.modelName.addEventListener("input", () => {
+    state.project.name = els.modelName.value.trim() || "Nuevo modelo";
+    markChanged();
+  });
+  els.sizeX.addEventListener("change", resizeProject);
+  els.sizeY.addEventListener("change", resizeProject);
+  els.gridZoom.addEventListener("input", () => {
+    state.zoomMode = "manual";
+    renderGrid();
+    renderEditorState();
+    resetGridViewportMargins();
+  });
+  if (els.settingsGridZoomMirror) {
+    els.settingsGridZoomMirror.addEventListener("input", () => setZoom(Number(els.settingsGridZoomMirror.value)));
+  }
+  els.backgroundPresetBtns?.forEach((button) => {
+    button.addEventListener("click", () => setInterfaceBackground(button.dataset.appBackground));
+  });
+  els.customBackgroundColor?.addEventListener("input", () => {
+    setInterfaceBackground("custom", els.customBackgroundColor.value);
+  });
+  els.resetBackgroundBtn?.addEventListener("click", resetInterfaceBackground);
+  els.viewerBackgroundPresetBtns?.forEach((button) => {
+    button.addEventListener("click", () => setViewerBackground(button.dataset.viewerBackground));
+  });
+  els.customViewerBackgroundColor?.addEventListener("input", () => {
+    setViewerBackground("custom", els.customViewerBackgroundColor.value);
+  });
+  els.resetViewerBackgroundBtn?.addEventListener("click", resetViewerBackground);
+  els.zoomInBtn.addEventListener("click", zoomIn);
+  els.zoomOutBtn.addEventListener("click", zoomOut);
+  els.fitZoomBtn.addEventListener("click", fitZoom);
+  els.editorModeBtn.addEventListener("click", toggleEditorLock);
+  els.quickEditorModeBtn.addEventListener("click", toggleEditorLock);
+  els.dragPaintToggle.addEventListener("change", () => {
+    state.dragPaintEnabled = els.dragPaintToggle.checked;
+    renderEditorState();
+  });
+
+  els.grid.addEventListener("pointerdown", beginDraw);
+  els.grid.addEventListener("pointermove", moveDraw);
+  window.addEventListener("pointerup", endDraw);
+  els.grid.addEventListener("touchmove", moveDraw, { passive: false });
+
+  document.querySelectorAll(".tool").forEach((button) => {
+    button.addEventListener("click", () => {
+      setTool(button.dataset.tool);
+    });
+  });
+  document.querySelectorAll(".rail-button").forEach((button) => {
+    button.addEventListener("click", () => openContextPanel(button.dataset.panelTarget));
+  });
+  els.closeContextPanelBtn.addEventListener("click", closeContextPanel);
+  document.querySelectorAll(".reference-type-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.referenceMode = normalizeReferenceType(button.dataset.referenceMode);
+      els.referenceMode.value = state.referenceMode;
+      setTool("reference");
+      updateButtons();
+    });
+  });
+
+  els.prevLayerBtn.addEventListener("click", previousLayer);
+  els.nextLayerBtn.addEventListener("click", nextLayer);
+  els.newLayerBtn.addEventListener("click", addLayer);
+  els.copyPrevLayerBtn.addEventListener("click", copyPreviousLayer);
+  els.duplicateLayerBtn.addEventListener("click", duplicateCurrentLayer);
+  els.deleteLayerBtn.addEventListener("click", deleteLayer);
+  els.clearLayerBtn.addEventListener("click", clearLayer);
+
+  els.undoBtn.addEventListener("click", undo);
+  els.redoBtn.addEventListener("click", redo);
+
+  els.newProjectBtn.addEventListener("click", () => {
+    if (!confirm("Crear un nuevo proyecto y borrar el actual?")) return;
+    state.project = createProject(12, 12);
+    state.currentLayer = 0;
+    state.undoStack = [];
+    state.redoStack = [];
+    syncImageStateFromProject();
+    renderPalette();
+    render();
+    markChanged("Nuevo proyecto creado.");
+  });
+  els.open3dBtn.addEventListener("click", open3dViewer);
+  els.quickOpen3dBtn.addEventListener("click", open3dViewer);
+  els.openOrganizerBtn.addEventListener("click", openOrganizer);
+  els.closeOrganizerBtn.addEventListener("click", () => els.organizerDialog.close());
+  els.runOrganizerBtn.addEventListener("click", runOrganizer);
+  els.openPdfBtn.addEventListener("click", openPdfDialog);
+  els.closePdfBtn.addEventListener("click", () => els.pdfDialog.close());
+  els.pdfProfile.addEventListener("change", () => {
+    resetPdfDownload();
+    applyPdfProfileDefaults();
+    updatePdfSummary();
+  });
+  els.pdfAllLayers.addEventListener("change", updatePdfRangeState);
+  [
+    els.pdfFromZ,
+    els.pdfToZ,
+    els.pdfShowLayerNumber,
+    els.pdfShowMatrix,
+    els.pdfShowColors,
+    els.pdfShowPieces,
+    els.pdfShowReferences,
+    els.pdfShowLayerPieces,
+    els.pdfShowInventory,
+    els.pdfShow3d,
+    els.pdfShowStats,
+    els.pdfShowPieceIds,
+    els.pdf3dFrequency,
+    els.pdfOrientation
+  ].forEach((control) => control.addEventListener("change", () => {
+    resetPdfDownload();
+    updatePdfSummary();
+  }));
+  els.pdfReorganizeFirstBtn.addEventListener("click", async () => {
+    await runOrganizer();
+    updatePdfSummary();
+  });
+  els.pdfWithoutOrganizationBtn.addEventListener("click", generatePdfFromDialog);
+  els.generatePdfBtn.addEventListener("click", generatePdfFromDialog);
+  els.downloadPdfBtn.addEventListener("click", downloadCurrentPdf);
+  els.sharePdfBtn.addEventListener("click", shareCurrentPdf);
+  els.showOrganizationToggle.addEventListener("change", renderGrid);
+  els.close3dBtn.addEventListener("click", () => {
+    if (viewer3dInstance?.closeBrickViewer) viewer3dInstance.closeBrickViewer();
+    else els.viewer3dDialog.close();
+  });
+  els.viewer3dDialog.addEventListener("close", () => {
+    if (viewer3dInstance?.closeBrickViewer) viewer3dInstance.closeBrickViewer();
+  });
+  els.recenter3dBtn.addEventListener("click", () => {
+    if (viewer3dInstance?.setBrickViewerView) viewer3dInstance.setBrickViewerView("iso");
+  });
+  document.querySelectorAll("[data-view3d]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (viewer3dInstance?.setBrickViewerView) viewer3dInstance.setBrickViewerView(button.dataset.view3d);
+    });
+  });
+  els.exportBtn.addEventListener("click", exportProject);
+  els.exportBrickAiBtn.addEventListener("click", exportBrickAiPackage);
+  els.quickExportBtn.addEventListener("click", exportProject);
+  els.importInput.addEventListener("change", () => {
+    const file = els.importInput.files?.[0];
+    if (file) importProject(file);
+    els.importInput.value = "";
+  });
+  els.quickImportInput.addEventListener("change", () => {
+    const file = els.quickImportInput.files?.[0];
+    if (file) importProject(file);
+    els.quickImportInput.value = "";
+  });
+  els.ldrImportInput.addEventListener("change", () => {
+    const file = els.ldrImportInput.files?.[0];
+    if (file) importLdrProject(file);
+    els.ldrImportInput.value = "";
+  });
+
+  els.referenceInput.addEventListener("change", () => {
+    const file = els.referenceInput.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.referenceDataUrl = String(reader.result);
+      state.referenceVisible = true;
+      syncImageStateToProject();
+      renderReference();
+      markChanged("Imagen de referencia cargada.");
+    };
+    reader.readAsDataURL(file);
+    els.referenceInput.value = "";
+  });
+  els.toggleReferenceBtn.addEventListener("click", () => {
+    state.referenceVisible = !state.referenceVisible;
+    renderReference();
+    markChanged();
+  });
+  els.referenceZoom.addEventListener("input", () => setImageScale(Number(els.referenceZoom.value) / 100));
+  els.referenceOpacity.addEventListener("input", () => {
+    state.imageState.opacity = Number(els.referenceOpacity.value);
+    renderReference();
+    markChanged();
+  });
+  els.blockOpacity.addEventListener("input", () => {
+    state.imageState.blockOpacity = Number(els.blockOpacity.value);
+    renderGrid();
+    renderReference();
+    markChanged();
+  });
+  els.imageEditBtn.addEventListener("click", () => setImageEditMode(!state.imageEditMode));
+  els.imageScaleDownBtn.addEventListener("click", () => setImageScale(state.imageState.scale - 0.1));
+  els.imageScaleUpBtn.addEventListener("click", () => setImageScale(state.imageState.scale + 0.1));
+  els.imageCenterBtn.addEventListener("click", centerReferenceImage);
+  els.imageResetBtn.addEventListener("click", resetReferenceImage);
+  els.referenceView.addEventListener("pointerdown", beginImageDrag);
+  els.referenceView.addEventListener("pointermove", moveImageDrag);
+  els.referenceView.addEventListener("pointerup", endImageDrag);
+  els.referenceView.addEventListener("pointercancel", endImageDrag);
+  els.fullscreenReferenceBtn.addEventListener("click", () => {
+    if (!state.referenceDataUrl) return;
+    els.referenceDialogImage.src = state.referenceDataUrl;
+    els.referenceDialog.showModal();
+  });
+  els.closeReferenceDialog.addEventListener("click", () => els.referenceDialog.close());
+  els.referenceMode.addEventListener("change", () => {
+    state.referenceMode = normalizeReferenceType(els.referenceMode.value);
+    if (state.tool !== "reference") setTool("reference");
+    else renderEditorState();
+  });
+  els.openShortcutsBtn.addEventListener("click", () => els.shortcutsDialog.showModal());
+  els.closeShortcutsBtn.addEventListener("click", () => els.shortcutsDialog.close());
+
+  els.pointForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    savePointDialog();
+  });
+  els.cancelPointBtn.addEventListener("click", closePointDialog);
+  els.finishPointBtn.addEventListener("click", () => {
+    if (state.editingReferenceId) finishReference(state.editingReferenceId);
+    closePointDialog();
+  });
+  els.deletePointBtn.addEventListener("click", () => {
+    if (state.editingReferenceId) deleteReference(state.editingReferenceId);
+  });
+  window.addEventListener("keydown", handleKeyboard);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.activePanel && !event.defaultPrevented) closeContextPanel();
+  });
+  window.addEventListener("orientationchange", () => requestAnimationFrame(refitGridIfNeeded));
+}
+
+function renderReference() {
+  const hasImage = Boolean(state.referenceDataUrl);
+  els.referenceTools.hidden = !hasImage;
+  els.referenceView.hidden = !hasImage || !state.referenceVisible;
+  els.toggleReferenceBtn.textContent = state.referenceVisible ? "Ocultar" : "Mostrar";
+  els.imageEditBtn.textContent = state.imageEditMode ? "Bloquear imagen" : "Editar imagen";
+  els.imageEditBtn.setAttribute("aria-pressed", String(state.imageEditMode));
+  els.referenceView.classList.toggle("image-editing", state.imageEditMode);
+  els.referenceView.classList.toggle("image-locked", !state.imageEditMode);
+  els.referenceOpacity.value = String(state.imageState.opacity);
+  els.blockOpacity.value = String(state.imageState.blockOpacity);
+  els.referenceZoom.value = String(Math.round(state.imageState.scale * 100));
+  els.gridScroller.classList.toggle("has-reference-image", hasImage && state.referenceVisible);
+  els.gridScroller.classList.toggle("image-edit-mode", state.imageEditMode && hasImage && state.referenceVisible);
+  if (hasImage) {
+    els.referenceImage.src = state.referenceDataUrl;
+    els.referenceImage.style.opacity = String(state.imageState.opacity / 100);
+    els.referenceView.style.setProperty("--reference-x", `${state.imageState.x}px`);
+    els.referenceView.style.setProperty("--reference-y", `${state.imageState.y}px`);
+    els.referenceView.style.setProperty("--reference-scale", String(state.imageState.scale));
+  }
+}
+
+function registerServiceWorker() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./service-worker.js", { scope: "./" }).catch(() => {
+      setStatus("No se pudo registrar el modo offline.");
+    });
+  }
+}
+
+function observeGridViewport() {
+  if (!("ResizeObserver" in window)) {
+    window.addEventListener("resize", refitGridIfNeeded);
+    return;
+  }
+  const observer = new ResizeObserver(() => {
+    refitGridIfNeeded();
+  });
+  observer.observe(els.gridScroller);
+}
+
+loadProject();
+loadAppearance();
+bindEvents();
+renderPalette();
+render();
+renderReference();
+renderContextPanel();
+observeGridViewport();
+registerServiceWorker();
